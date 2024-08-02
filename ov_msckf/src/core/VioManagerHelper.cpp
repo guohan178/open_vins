@@ -206,6 +206,7 @@ void VioManager::retriangulate_active_tracks(const ov_core::CameraData &message)
 
   // Current active tracks in our frontend
   // TODO: should probably assert here that these are at the message time...
+  // 因为是更新过后，所以这里拿到的last_obs，last_ids对应的都是当前的message
   auto last_obs = trackFEATS->get_last_obs();
   auto last_ids = trackFEATS->get_last_ids();
 
@@ -216,6 +217,7 @@ void VioManager::retriangulate_active_tracks(const ov_core::CameraData &message)
   std::unordered_map<size_t, Eigen::Vector3d> active_tracks_posinG_new;
 
   // Append our new observations for each camera
+  // 当前message的特征点
   std::map<size_t, cv::Point2f> feat_uvs_in_cam0;
   for (auto const &cam_id : message.sensor_ids) {
 
@@ -244,15 +246,18 @@ void VioManager::retriangulate_active_tracks(const ov_core::CameraData &message)
       }
 
       // Skip this feature if it is a SLAM feature (the state estimate takes priority)
+      // 如果此feature在state->_features_SLAM中则跳过不再重新三角化
       if (state->_features_SLAM.find(featid) != state->_features_SLAM.end()) {
         continue;
       }
 
-      // Get the UV coordinate normal
+      // 三角化https://docs.openvins.com/update-featinit.html#featinit-linear-1d中的3D Cartesian Triangulation
+      //  Get the UV coordinate normal
       cv::Point2f pt_n = state->_cam_intrinsics_cameras.at(cam_id)->undistort_cv(pt_d);
       Eigen::Matrix<double, 3, 1> b_i;
       b_i << pt_n.x, pt_n.y, 1;
       b_i = R_GtoCi.transpose() * b_i;
+      // 世界坐标系下的规一化坐标
       b_i = b_i / b_i.norm();
       Eigen::Matrix3d Bperp = skew_x(b_i);
 
@@ -308,6 +313,7 @@ void VioManager::retriangulate_active_tracks(const ov_core::CameraData &message)
     return;
 
   // Append our SLAM features we have
+  // 追加SLAM features中特征点在世界坐标系的位姿
   for (const auto &feat : state->_features_SLAM) {
     Eigen::Vector3d p_FinG = feat.second->get_xyz(false);
     if (LandmarkRepresentation::is_relative_representation(feat.second->_feat_representation)) {
@@ -347,6 +353,7 @@ void VioManager::retriangulate_active_tracks(const ov_core::CameraData &message)
 
     // Calculate the depth of the feature in the current frame
     // Project SLAM feature and non-cam0 features into the current frame of reference
+    // 把slam feature的位姿映射到当前message时间对应的camera pose
     Eigen::Vector3d p_FinIi = R_GtoIi * (feat.second - p_IiinG);
     Eigen::Vector3d p_FinCi = R_ItoC * p_FinIi + p_IinC;
     double depth = p_FinCi(2);

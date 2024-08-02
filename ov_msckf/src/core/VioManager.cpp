@@ -168,15 +168,18 @@ void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
   // The oldest time we need IMU with is the last clone
   // We shouldn't really need the whole window, but if we go backwards in time we will
   double oldest_time = state->margtimestep();
+  // state->_timestamp指的是当前相机时间
   if (oldest_time > state->_timestamp) {
     oldest_time = -1;
   }
   if (!is_initialized_vio) {
     oldest_time = message.timestamp - params.init_options.init_window_time + state->_calib_dt_CAMtoIMU->value()(0) - 0.10;
   }
+  // 顺便把propagator中的oldest_time-0.1之前的老imu都删除了
   propagator->feed_imu(message, oldest_time);
 
   // Push back to our initializer
+  // 顺便把initializer中的oldest_time-0.1之前的老imu都删除了
   if (!is_initialized_vio) {
     initializer->feed_imu(message, oldest_time);
   }
@@ -337,6 +340,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Also augment it with a new clone!
   // NOTE: if the state is already at the given time (can happen in sim)
   // NOTE: then no need to prop since we already are at the desired timestep
+  // 在新一帧图像到来时，首先将系统的状态通过Imu的数据递推到当前的相机时刻
   if (state->_timestamp != message.timestamp) {
     propagator->propagate_and_clone(state, message.timestamp);
   }
@@ -345,6 +349,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // If we have not reached max clones, we should just return...
   // This isn't super ideal, but it keeps the logic after this easier...
   // We can start processing things when we have at least 5 clones since we can start triangulating things...
+  // 如果imu的clone数没达到max_clone_size,或者未达到5个，意味着不好三角化，则返回
   if ((int)state->_clones_IMU.size() < std::min(state->_options.max_clone_size, 5)) {
     PRINT_DEBUG("waiting for enough clone states (%d of %d)....\n", (int)state->_clones_IMU.size(),
                 std::min(state->_options.max_clone_size, 5));
@@ -366,12 +371,16 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Now, lets get all features that should be used for an update that are lost in the newest frame
   // We explicitly request features that have not been deleted (used) in another update step
   std::vector<std::shared_ptr<Feature>> feats_lost, feats_marg, feats_slam;
+  // 获得在state->_timestamp时间之前已经在追踪的所有特征点，即所谓跟丢的特征
   feats_lost = trackFEATS->get_feature_database()->features_not_containing_newer(state->_timestamp, false, true);
 
   // Don't need to get the oldest features until we reach our max number of clones
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size || (int)state->_clones_IMU.size() > 5) {
+    // feats_marg首先初始化为被跟踪上的特征点，后续用作EFK更新，但并未加入状态变量。此处的feats_marg包含的是与指定margtimestep时间相同的特征点
+    // feats_marg中的特征点不一定是被跟丢的，可能当前帧是能看到的
     feats_marg = trackFEATS->get_feature_database()->features_containing(state->margtimestep(), false, true);
     if (trackARUCO != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
+      // feats_slam初始化为ARUCO的特征点，后续加入状态变量进行EKF更新
       feats_slam = trackARUCO->get_feature_database()->features_containing(state->margtimestep(), false, true);
     }
   }
@@ -379,6 +388,8 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Remove any lost features that were from other image streams
   // E.g: if we are cam1 and cam0 has not processed yet, we don't want to try to use those in the update yet
   // E.g: thus we wait until cam0 process its newest image to remove features which were seen from that camera
+  // feats_lost需要删除掉不是从当下传入的相机看见的跟丢的特征点，单目不涉及，主要是双目或者多相机，譬如当前传入相机是cam1,如果feats_lost的特征点是cam0的，但最新的
+  // 图像cam0还没处理完，则这种跟丢的点需要移除（因为我们不晓得此跟丢的特征点在最新的cam0是否还在被跟踪）
   auto it1 = feats_lost.begin();
   while (it1 != feats_lost.end()) {
     bool found_current_message_camid = false;
@@ -397,6 +408,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
 
   // We also need to make sure that the max tracks does not contain any lost features
   // This could happen if the feature was lost in the last frame, but has a measurement at the marg timestep
+  // feats_lost中若某个特征点在被边缘化的特征点中也包含，则需要去掉此特征点
   it1 = feats_lost.begin();
   while (it1 != feats_lost.end()) {
     if (std::find(feats_marg.begin(), feats_marg.end(), (*it1)) != feats_marg.end()) {
@@ -408,6 +420,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   }
 
   // Find tracks that have reached max length, these can be made into SLAM features
+  // 划分特征类型，针对feats_marg中的特征点，根据其被追踪到的次数（即大于max_clone_size），划分为未slam更新的长期特征feats_maxtracks和短期特征feats_marg，这俩都用于msckf更新
   std::vector<std::shared_ptr<Feature>> feats_maxtracks;
   auto it2 = feats_marg.begin();
   while (it2 != feats_marg.end()) {
@@ -439,6 +452,8 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
 
   // Append a new SLAM feature if we have the room to do so
   // Also check that we have waited our delay amount (normally prevents bad first set of slam points)
+  // 将追踪到的长期特征点feats_maxtracks添加到feats_slam中，因为feats_slam会被加入到状态变量中，因此要严格控制防止状态爆炸
+  // 同时需要检查是否已等待了延迟量以防引入第一组较差的slam特征点
   if (state->_options.max_slam_features > 0 && message.timestamp - startup_time >= params.dt_slam_delay &&
       (int)state->_features_SLAM.size() < state->_options.max_slam_features + curr_aruco_tags) {
     // Get the total amount to add, then the max amount that we can add given our marginalize feature array
@@ -446,6 +461,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     int valid_amount = (amount_to_add > (int)feats_maxtracks.size()) ? (int)feats_maxtracks.size() : amount_to_add;
     // If we have at least 1 that we can add, lets add it!
     // Note: we remove them from the feat_marg array since we don't want to reuse information...
+    // feats_slam插入的是feats_maxtracks中后valid_amount个特征点，因为不想信息重复使用，因此被加入到feats_slam的特征点需要从feats_maxtracks删除
     if (valid_amount > 0) {
       feats_slam.insert(feats_slam.end(), feats_maxtracks.end() - valid_amount, feats_maxtracks.end());
       feats_maxtracks.erase(feats_maxtracks.end() - valid_amount, feats_maxtracks.end());
@@ -457,6 +473,10 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: we only enforce this if the current camera message is where the feature was seen from
   // NOTE: if you do not use FEJ, these types of slam features *degrade* the estimator performance....
   // NOTE: we will also marginalize SLAM features if they have failed their update a couple times in a row
+  // 遍历所有当前状态对应的SLAM特征，若SLAM特征被当前的trackFEATS追踪到，则加入到feats_slam中，否则将landmark设置为需要边缘化
+  // 实际上每次slam和msckf更新完，database中被更新使用过的feat就会被删除，因此每次送入到slam_update更新中的feat是state->_features_SLAM中有且当前database
+  // 又被追踪到的（即此feat一直在被追踪到，即便上一次slam更新后已被删，但当前camera又被追踪到），若当前没被追踪到，
+  // 则state->_features_SLAM中没被当前database追踪到的特征就会被边缘化
   for (std::pair<const size_t, std::shared_ptr<Landmark>> &landmark : state->_features_SLAM) {
     if (trackARUCO != nullptr) {
       std::shared_ptr<Feature> feat1 = trackARUCO->get_feature_database()->get_feature(landmark.second->_featid);
@@ -478,16 +498,21 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Lets marginalize out all old SLAM features here
   // These are ones that where not successfully tracked into the current frame
   // We do *NOT* marginalize out our aruco tags landmarks
+  // 对上一步state->_features_SLAM中被标为should_marg = true的landmark进行边缘化处理
   StateHelper::marginalize_slam(state);
 
   // Separate our SLAM features into new ones, and old ones
+  // 把feats_slam中的特征点分为feats_slam_DELAYED和feats_slam_UPDATE
   std::vector<std::shared_ptr<Feature>> feats_slam_DELAYED, feats_slam_UPDATE;
   for (size_t i = 0; i < feats_slam.size(); i++) {
     if (state->_features_SLAM.find(feats_slam.at(i)->featid) != state->_features_SLAM.end()) {
+      // feats_slam_UPDATE代表一直到当前帧camera一直被追踪的到的feat（即便上一次slam更新此feat已被删除，但当前帧还能追踪到此feat，就会被重新插入到database中），
+      // 此feat也在state->_features_SLAM状态量中被更新过
       feats_slam_UPDATE.push_back(feats_slam.at(i));
       // PRINT_DEBUG("[UPDATE-SLAM]: found old feature %d (%d
       // measurements)\n",(int)feats_slam.at(i)->featid,(int)feats_slam.at(i)->timestamps_left.size());
     } else {
+      // 第一次进入到slam中要参与更新的长期slam点（这些特征点后面会被初始化变成状态向量）
       feats_slam_DELAYED.push_back(feats_slam.at(i));
       // PRINT_DEBUG("[UPDATE-SLAM]: new feature ready %d (%d
       // measurements)\n",(int)feats_slam.at(i)->featid,(int)feats_slam.at(i)->timestamps_left.size());
@@ -495,6 +520,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   }
 
   // Concatenate our MSCKF feature arrays (i.e., ones not being used for slam updates)
+  // 接下来搜集需要进行MSCKF更新的特征点，feats_lost,feats_marg,feats_maxtracks(前面已经把feats_lost中包含的feats_marg去掉了，所以不会重复，而feats_maxtracks是从feats_marg提取的)
   std::vector<std::shared_ptr<Feature>> featsup_MSCKF = feats_lost;
   featsup_MSCKF.insert(featsup_MSCKF.end(), feats_marg.begin(), feats_marg.end());
   featsup_MSCKF.insert(featsup_MSCKF.end(), feats_maxtracks.begin(), feats_maxtracks.end());
@@ -506,6 +532,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Sort based on track length
   // TODO: we should have better selection logic here (i.e. even feature distribution in the FOV etc..)
   // TODO: right now features that are "lost" are at the front of this vector, while ones at the end are long-tracks
+  // 在进行MSCKF更新前对featsup_MSCKF进行筛选，目前是按照被追踪的次数进行排序，被追踪的次数少的排在featsup_MSCKF前面，获取在设置范围内的特征点个数进行EFK更新
   auto compare_feat = [](const std::shared_ptr<Feature> &a, const std::shared_ptr<Feature> &b) -> bool {
     size_t asize = 0;
     size_t bsize = 0;
@@ -520,6 +547,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Pass them to our MSCKF updater
   // NOTE: if we have more then the max, we select the "best" ones (i.e. max tracks) for this update
   // NOTE: this should only really be used if you want to track a lot of features, or have limited computational resources
+  // 如果featsup_MSCKF的大小超过配置文件中的max_msckf_in_update限制，则取被多次跟踪的那些特征点
   if ((int)featsup_MSCKF.size() > state->_options.max_msckf_in_update)
     featsup_MSCKF.erase(featsup_MSCKF.begin(), featsup_MSCKF.end() - state->_options.max_msckf_in_update);
   updaterMSCKF->update(state, featsup_MSCKF);
@@ -529,21 +557,25 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Perform SLAM delay init and update
   // NOTE: that we provide the option here to do a *sequential* update
   // NOTE: this will be a lot faster but won't be as accurate.
+  // 在进行SLAM EFK更新时首先对已经在状态向量中的部分特征进行更新，其次再对不在状态向量中的特征进行EKF更新
   std::vector<std::shared_ptr<Feature>> feats_slam_UPDATE_TEMP;
   while (!feats_slam_UPDATE.empty()) {
     // Get sub vector of the features we will update with
+    // feats_slam_UPDATE中的特征都是之前就在状态向量中，且本次依然在database中又被追踪到的特征
     std::vector<std::shared_ptr<Feature>> featsup_TEMP;
     featsup_TEMP.insert(featsup_TEMP.begin(), feats_slam_UPDATE.begin(),
                         feats_slam_UPDATE.begin() + std::min(state->_options.max_slam_in_update, (int)feats_slam_UPDATE.size()));
     feats_slam_UPDATE.erase(feats_slam_UPDATE.begin(),
                             feats_slam_UPDATE.begin() + std::min(state->_options.max_slam_in_update, (int)feats_slam_UPDATE.size()));
     // Do the update
+    // 对于特征点不用做三角化
     updaterSLAM->update(state, featsup_TEMP);
     feats_slam_UPDATE_TEMP.insert(feats_slam_UPDATE_TEMP.end(), featsup_TEMP.begin(), featsup_TEMP.end());
     propagator->invalidate_cache();
   }
   feats_slam_UPDATE = feats_slam_UPDATE_TEMP;
   rT5 = boost::posix_time::microsec_clock::local_time();
+  // 新增的特征点要先做三角化，然后还需要计算新增特征点对应的状态量及对应的增广协方差
   updaterSLAM->delayed_init(state, feats_slam_DELAYED);
   rT6 = boost::posix_time::microsec_clock::local_time();
 
@@ -576,6 +608,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Remove features that where used for the update from our extractors at the last timestep
   // This allows for measurements to be used in the future if they failed to be used this time
   // Note we need to do this before we feed a new image, as we want all new measurements to NOT be deleted
+  // 此次更新量测用过的特征就被删除了
   trackFEATS->get_feature_database()->cleanup();
   if (trackARUCO != nullptr) {
     trackARUCO->get_feature_database()->cleanup();

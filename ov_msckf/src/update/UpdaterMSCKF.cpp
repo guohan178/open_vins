@@ -66,6 +66,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   rT0 = boost::posix_time::microsec_clock::local_time();
 
   // 0. Get all timestamps our clones are at (and thus valid measurement times)
+  // 保存滑窗内所有相机对应的时间戳信息到clonetimes
   std::vector<double> clonetimes;
   for (const auto &clone_imu : state->_clones_IMU) {
     clonetimes.emplace_back(clone_imu.first);
@@ -76,6 +77,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   while (it0 != feature_vec.end()) {
 
     // Clean the feature
+    // 不在滑窗时间内的特征点或特征点对应的不在滑窗内的时间被删除
     (*it0)->clean_old_measurements(clonetimes);
 
     // Count how many measurements
@@ -85,6 +87,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
 
     // Remove if we don't have enough
+    // 在clean_old_measurements后，如果剩下的此特征点被滑窗内相机观测到的次数不超过3次，则此特征点被删除
     if (ct_meas < 2) {
       (*it0)->to_delete = true;
       it0 = feature_vec.erase(it0);
@@ -107,14 +110,17 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       Eigen::Matrix<double, 3, 1> p_CioinG = clone_imu.second->pos() - R_GtoCi.transpose() * clone_calib.second->pos();
 
       // Append to our map
+      // clones_cami的first是一个相机对应的不同时间，second是pose
       clones_cami.insert({clone_imu.first, FeatureInitializer::ClonePose(R_GtoCi, p_CioinG)});
     }
 
     // Append to our map
+    // clones_cam的first是相机id，second是一个相机对应的多个时间的camera pose
     clones_cam.insert({clone_calib.first, clones_cami});
   }
 
   // 3. Try to triangulate all MSCKF or new SLAM features that have measurements
+  // 三角化特征点的3D坐标（已知滑窗内的所有相机位姿和特征点的2D匹配点坐标），先三角化得到初始值，然后再进行高斯非线性进一步优化（类似BA）
   auto it1 = feature_vec.begin();
   while (it1 != feature_vec.end()) {
 
@@ -129,6 +135,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Gauss-newton refine the feature
     bool success_refine = true;
     if (initializer_feat->config().refine_features) {
+      // 需要进一步细看？？？
       success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam);
     }
 
@@ -143,17 +150,21 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // Calculate the max possible measurement size
+  // 最大量测数量
   size_t max_meas_size = 0;
   for (size_t i = 0; i < feature_vec.size(); i++) {
     for (const auto &pair : feature_vec.at(i)->timestamps) {
+      // u,v是2维，所以乘2
       max_meas_size += 2 * feature_vec.at(i)->timestamps[pair.first].size();
     }
   }
 
   // Calculate max possible state size (i.e. the size of our covariance)
   // NOTE: that when we have the single inverse depth representations, those are only 1dof in size
+  // 除去state->_features_SLAM的个数后剩下的最大状态量的数量
   size_t max_hx_size = state->max_covariance_size();
   for (auto &landmark : state->_features_SLAM) {
+    // 此size返回的是状态维数大小，这里是3
     max_hx_size -= landmark.second->size();
   }
 
@@ -170,6 +181,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   while (it2 != feature_vec.end()) {
 
     // Convert our feature into our current format
+    // 设置特征点的属性
     UpdaterHelper::UpdaterHelperFeature feat;
     feat.featid = (*it2)->featid;
     feat.uvs = (*it2)->uvs;
@@ -183,6 +195,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
 
     // Save the position and its fej value
+    // 通过传入的特征表示来判断是相对的还是global的，进而给feat的anchor或global赋值
     if (LandmarkRepresentation::is_relative_representation(feat.feat_representation)) {
       feat.anchor_cam_id = (*it2)->anchor_cam_id;
       feat.anchor_clone_timestamp = (*it2)->anchor_clone_timestamp;
@@ -194,12 +207,14 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
 
     // Our return values (feature jacobian, state jacobian, residual, and order of state jacobian)
-    Eigen::MatrixXd H_f;
-    Eigen::MatrixXd H_x;
+    // H_x和 Hx_order是配对的，前者存储了观测特征点关于MSCKF状态的导数，后者存储了MSCKF状态和大小
+    Eigen::MatrixXd H_f; // 观测关于特征点的jacobian矩阵
+    Eigen::MatrixXd H_x; // 观测关于imu位姿（camera位姿），imu到相机外参，相机内参的jacobian矩阵
     Eigen::VectorXd res;
     std::vector<std::shared_ptr<Type>> Hx_order;
 
     // Get the Jacobian for this feature
+    // 对一个特征点及观测到这个特征点的所有相机pose进行jacobian计算，H_f是观测对feature位置的jacobian,H_x是观测对所有相机pose（及内外参，若估计的话）的jacobian,不包括Imu的15维
     UpdaterHelper::get_feature_jacobian_full(state, feat, H_f, H_x, res, Hx_order);
 
     // Nullspace project
@@ -222,6 +237,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     }
 
     // Check if we should delete or not
+    // 若超过卡方检验的值，说明这个特征点不可靠，可以删除
     if (chi2 > _options.chi2_multipler * chi2_check) {
       (*it2)->to_delete = true;
       it2 = feature_vec.erase(it2);
@@ -245,11 +261,14 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       }
 
       // Append to our large Jacobian
+      // 所有特征点的观测模型合并
+      // 每次把整个hx对应type位置所有行都赋值给Hx_big的对应位置
       Hx_big.block(ct_meas, Hx_mapping[var], H_x.rows(), var->size()) = H_x.block(0, ct_hx, H_x.rows(), var->size());
       ct_hx += var->size();
     }
 
     // Append our residual and move forward
+    // 所有特征点的res合并
     res_big.block(ct_meas, 0, res.rows(), 1) = res;
     ct_meas += res.rows();
     it2++;
@@ -272,6 +291,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   Hx_big.conservativeResize(ct_meas, ct_jacob);
 
   // 5. Perform measurement compression
+  // 对所有特征点的观测进行QR分解
   UpdaterHelper::measurement_compress_inplace(Hx_big, res_big);
   if (Hx_big.rows() < 1) {
     return;
@@ -279,6 +299,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   rT4 = boost::posix_time::microsec_clock::local_time();
 
   // Our noise is isotropic, so make it here after our compression
+  // 量测方差
   Eigen::MatrixXd R_big = _options.sigma_pix_sq * Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
 
   // 6. With all good features update the state

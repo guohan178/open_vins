@@ -48,7 +48,9 @@ public:
     // Set our default state value
     Eigen::VectorXd imu0 = Eigen::VectorXd::Zero(16, 1);
     imu0(3) = 1.0;
+    // 传输状态变量估计值
     set_value_internal(imu0);
+    // 传输fej状态变量估计值
     set_fej_internal(imu0);
   }
 

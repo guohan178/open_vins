@@ -32,7 +32,7 @@
 
 namespace ov_msckf {
 
-class State;
+class State; // 前向声明
 
 /**
  * @brief Performs the state covariance and mean propagation using imu measurements

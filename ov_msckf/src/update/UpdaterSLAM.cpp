@@ -110,10 +110,12 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
       Eigen::Matrix<double, 3, 1> p_CioinG = clone_imu.second->pos() - R_GtoCi.transpose() * clone_calib.second->pos();
 
       // Append to our map
+      // clones_cami的first是一个相机对应的不同时间，second是pose
       clones_cami.insert({clone_imu.first, FeatureInitializer::ClonePose(R_GtoCi, p_CioinG)});
     }
 
     // Append to our map
+    // clones_cam的first是相机id，second是一个相机对应的多个时间的camera pose
     clones_cam.insert({clone_calib.first, clones_cami});
   }
 
@@ -160,6 +162,7 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
     auto feat_rep =
         ((int)feat.featid < state->_options.max_aruco_features) ? state->_options.feat_rep_aruco : state->_options.feat_rep_slam;
     feat.feat_representation = feat_rep;
+    // 若feature类别为ANCHORED_INVERSE_DEPTH_SINGLE，则计算H_f时先按照3维逆深度计算，后面再把方向bearing的两维做零空间映射
     if (feat_rep == LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) {
       feat.feat_representation = LandmarkRepresentation::Representation::ANCHORED_MSCKF_INVERSE_DEPTH;
     }
@@ -187,12 +190,15 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
     // If we are doing the single feature representation, then we need to remove the bearing portion
     // To do so, we project the bearing portion onto the state and depth Jacobians and the residual.
     // This allows us to directly initialize the feature as a depth-old feature
+    // 把the bearing portion做零空间映射，只留逆深度一维
     if (feat_rep == LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) {
 
       // Append the Jacobian in respect to the depth of the feature
       Eigen::MatrixXd H_xf = H_x;
       H_xf.conservativeResize(H_x.rows(), H_x.cols() + 1);
+      // 把逆深度变量放在状态向量中
       H_xf.block(0, H_x.cols(), H_x.rows(), 1) = H_f.block(0, H_f.cols() - 1, H_f.rows(), 1);
+      // H_f只留bearing portion这两维，用于后续做零空间映射
       H_f.conservativeResize(H_f.rows(), H_f.cols() - 1);
 
       // Nullspace project the bearing portion
@@ -201,6 +207,7 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
       UpdaterHelper::nullspace_project_inplace(H_f, H_xf, res);
 
       // Split out the state portion and feature portion
+      // 恢复原状态变量和feature变量（这里H_f只剩逆深度一维）
       H_x = H_xf.block(0, 0, H_xf.rows(), H_xf.cols() - 1);
       H_f = H_xf.block(0, H_xf.cols() - 1, H_xf.rows(), 1);
     }
@@ -230,6 +237,7 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
     // Try to initialize, delete new pointer if we failed
     double chi2_multipler =
         ((int)feat.featid < state->_options.max_aruco_features) ? _options_aruco.chi2_multipler : _options_slam.chi2_multipler;
+    // 对landmark的特征状态变量做初始化，包括对应状态协防差的增广
     if (StateHelper::initialize(state, landmark, Hx_order, H_x, H_f, R, res, chi2_multipler)) {
       state->_features_SLAM.insert({(*it2)->featid, landmark});
       (*it2)->to_delete = true;
@@ -261,6 +269,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
   rT0 = boost::posix_time::microsec_clock::local_time();
 
   // 0. Get all timestamps our clones are at (and thus valid measurement times)
+  // 保存滑窗内所有相机对应的时间戳信息到clonetimes
   std::vector<double> clonetimes;
   for (const auto &clone_imu : state->_clones_IMU) {
     clonetimes.emplace_back(clone_imu.first);
@@ -271,6 +280,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
   while (it0 != feature_vec.end()) {
 
     // Clean the feature
+    // 不在滑窗时间内的特征点或特征点对应的不在滑窗内的时间被删除
     (*it0)->clean_old_measurements(clonetimes);
 
     // Count how many measurements
@@ -282,10 +292,13 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
     // Get the landmark and its representation
     // For single depth representation we need at least two measurement
     // This is because we do nullspace projection
+    // 得到landmark及其对应表现形式（此函数传进来的feature都是state->_features_SLAM已有的），如果表现形式是single
+    // depth，则需要至少两个camera观测到
     std::shared_ptr<Landmark> landmark = state->_features_SLAM.at((*it0)->featid);
     int required_meas = (landmark->_feat_representation == LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) ? 2 : 1;
 
     // Remove if we don't have enough
+    // 移除不符合要求的feature
     if (ct_meas < 1) {
       (*it0)->to_delete = true;
       it0 = feature_vec.erase(it0);
@@ -298,6 +311,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
   rT1 = boost::posix_time::microsec_clock::local_time();
 
   // Calculate the max possible measurement size
+  // 计算最大可能量测数量
   size_t max_meas_size = 0;
   for (size_t i = 0; i < feature_vec.size(); i++) {
     for (const auto &pair : feature_vec.at(i)->timestamps) {
@@ -306,6 +320,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
   }
 
   // Calculate max possible state size (i.e. the size of our covariance)
+  // 计算可能的最大状态数量
   size_t max_hx_size = state->max_covariance_size();
 
   // Large Jacobian, residual, and measurement noise of *all* features for this update
@@ -329,6 +344,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
     std::shared_ptr<Landmark> landmark = state->_features_SLAM.at((*it2)->featid);
 
     // Convert the state landmark into our current format
+    // 这里拿的是此特征的像素信息（此信息是最新的camera拍到特征的像素信息）
     UpdaterHelper::UpdaterHelperFeature feat;
     feat.featid = (*it2)->featid;
     feat.uvs = (*it2)->uvs;
@@ -337,11 +353,13 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
 
     // If we are using single inverse depth, then it is equivalent to using the msckf inverse depth
     feat.feat_representation = landmark->_feat_representation;
+    // 把the bearing portion做零空间映射，只留逆深度一维
     if (landmark->_feat_representation == LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) {
       feat.feat_representation = LandmarkRepresentation::Representation::ANCHORED_MSCKF_INVERSE_DEPTH;
     }
 
     // Save the position and its fej value
+    // 这里拿到的是此特征之前计算的landmark的三角化位姿信息
     if (LandmarkRepresentation::is_relative_representation(feat.feat_representation)) {
       feat.anchor_cam_id = landmark->_anchor_cam_id;
       feat.anchor_clone_timestamp = landmark->_anchor_clone_timestamp;
@@ -367,7 +385,9 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
 
       // Append the Jacobian in respect to the depth of the feature
       H_xf.conservativeResize(H_x.rows(), H_x.cols() + 1);
+      // 把逆深度变量放在状态向量中
       H_xf.block(0, H_x.cols(), H_x.rows(), 1) = H_f.block(0, H_f.cols() - 1, H_f.rows(), 1);
+      // H_f只留bearing portion这两维，用于后续做零空间映射
       H_f.conservativeResize(H_f.rows(), H_f.cols() - 1);
 
       // Nullspace project the bearing portion
@@ -520,6 +540,7 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
 
   // Get Jacobians of p_FinG wrt old representation
   Eigen::MatrixXd H_f_old;
+  // H_x_old为特征在全局坐标系的位置对老anchor位置及anchor外参的hx（此anchor变量为imu在世界坐标系下的位姿）
   std::vector<Eigen::MatrixXd> H_x_old;
   std::vector<std::shared_ptr<Type>> x_order_old;
   UpdaterHelper::get_feature_jacobian_representation(state, old_feat, H_f_old, H_x_old, x_order_old);
@@ -528,6 +549,7 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
   UpdaterHelper::UpdaterHelperFeature new_feat;
   new_feat.featid = landmark->_featid;
   new_feat.feat_representation = landmark->_feat_representation;
+  // 这里使用时传入的new_anchor_cam_id实际和老的一样
   new_feat.anchor_cam_id = new_cam_id;
   new_feat.anchor_clone_timestamp = new_anchor_timestamp;
 
@@ -536,19 +558,26 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
 
   // OLD: anchor camera position and orientation
   Eigen::Matrix<double, 3, 3> R_GtoIOLD = state->_clones_IMU.at(old_feat.anchor_clone_timestamp)->Rot();
+  // 老anchor的camera从世界坐标系到camera本体的姿态
   Eigen::Matrix<double, 3, 3> R_GtoOLD = state->_calib_IMUtoCAM.at(old_feat.anchor_cam_id)->Rot() * R_GtoIOLD;
+  // 老anchor的camera在世界坐标系下的位置
   Eigen::Matrix<double, 3, 1> p_OLDinG = state->_clones_IMU.at(old_feat.anchor_clone_timestamp)->pos() -
                                          R_GtoOLD.transpose() * state->_calib_IMUtoCAM.at(old_feat.anchor_cam_id)->pos();
 
   // NEW: anchor camera position and orientation
   Eigen::Matrix<double, 3, 3> R_GtoINEW = state->_clones_IMU.at(new_feat.anchor_clone_timestamp)->Rot();
+  // 新anchor的camera从世界坐标系到camera本体的姿态
   Eigen::Matrix<double, 3, 3> R_GtoNEW = state->_calib_IMUtoCAM.at(new_feat.anchor_cam_id)->Rot() * R_GtoINEW;
+  // 新anchor的camera在世界坐标系下的位置
   Eigen::Matrix<double, 3, 1> p_NEWinG = state->_clones_IMU.at(new_feat.anchor_clone_timestamp)->pos() -
                                          R_GtoNEW.transpose() * state->_calib_IMUtoCAM.at(new_feat.anchor_cam_id)->pos();
 
   // Calculate transform between the old anchor and new one
+  // 老anchor到新anchor的camera姿态变换
   Eigen::Matrix<double, 3, 3> R_OLDtoNEW = R_GtoNEW * R_GtoOLD.transpose();
+  // 世界坐标系下老anchor的camera到新anchor的camera的位置
   Eigen::Matrix<double, 3, 1> p_OLDinNEW = R_GtoNEW * (p_OLDinG - p_NEWinG);
+  // 这里的landmark->get_xyz(false)为此landmark在老anchor相机坐标系下的归一化坐标
   new_feat.p_FinA = R_OLDtoNEW * landmark->get_xyz(false) + p_OLDinNEW;
 
   //==========================================================================
@@ -573,6 +602,7 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
 
   // Get Jacobians of p_FinG wrt new representation
   Eigen::MatrixXd H_f_new;
+  // H_x_new为特征在全局坐标系的位置对新anchor位置及anchor外参的hx（此anchor变量为imu在世界坐标系下的位姿）
   std::vector<Eigen::MatrixXd> H_x_new;
   std::vector<std::shared_ptr<Type>> x_order_new;
   UpdaterHelper::get_feature_jacobian_representation(state, new_feat, H_f_new, H_x_new, x_order_new);
@@ -605,6 +635,7 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
   Phi_id_map.insert({landmark, current_it});
   phi_order_OLD.push_back(landmark);
   current_it += landmark->size();
+  // 此时的phi_order_OLD包括了新，老anchor变量（若估计外参则包括外参）及此feat（landmrk）状态变量
 
   // Anchor change Jacobian
   int phisize = (new_feat.feat_representation != LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) ? 3 : 1;
@@ -612,7 +643,11 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
   Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(phisize, phisize);
 
   // Inverse of our new representation
-  // pf_new_error = Hfnew^{-1}*(Hfold*pf_olderror+Hxold*x_olderror-Hxnew*x_newerror)
+  // pf_new_error，pf_olderror: 特征在anchor坐标系下的逆深度误差（3维，new是新anchor的，old是老anchor的，利用的是无论新老anchor，
+  // 特征在世界坐标系下的位置不变的关系，根据https://docs.openvins.com/update-feat.html#feat-rep-anchor-inv3的Anchored Inverse Depth (MSCKF
+  // Version)列的方程）
+  // 状态方程：pf_new_error = Hfnew^{-1}*(Hfold*pf_olderror+Hxold*x_olderror-Hxnew*x_newerror)
+
   Eigen::MatrixXd H_f_new_inv;
   if (phisize == 1) {
     H_f_new_inv = 1.0 / H_f_new.squaredNorm() * H_f_new.transpose();
@@ -634,6 +669,7 @@ void UpdaterSLAM::perform_anchor_change(std::shared_ptr<State> state, std::share
   }
 
   // Perform covariance propagation
+  // 特征的anchor换了，所以要更新下预测方程中关于特征的Phi矩阵及对应的协方差P
   StateHelper::EKFPropagation(state, phi_order_NEW, phi_order_OLD, Phi, Q);
 
   // Set state from new feature

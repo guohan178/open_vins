@@ -84,9 +84,18 @@ void FeatureDatabase::update_feature(size_t id, double timestamp, size_t cam_id,
   features_idlookup[id] = feat;
 }
 
+/**
+ * @brief features_not_containing_newer是用来查找只在指定timestamp之前出现的特征，即返回所谓跟丢了的特征
+ *
+ * @param timestamp
+ * @param remove
+ * @param skip_deleted
+ * @return std::vector<std::shared_ptr<Feature>>
+ */
 std::vector<std::shared_ptr<Feature>> FeatureDatabase::features_not_containing_newer(double timestamp, bool remove, bool skip_deleted) {
 
   // Our vector of features that do not have measurements after the specified time
+  // feats_old包含的是指定timestamp之前的特征点（这些特征点只在timestamp出现过，在timestamp之后不再出现）
   std::vector<std::shared_ptr<Feature>> feats_old;
 
   // Now lets loop through all features, and just make sure they are not old
@@ -99,8 +108,10 @@ std::vector<std::shared_ptr<Feature>> FeatureDatabase::features_not_containing_n
     }
     // Loop through each camera
     // If we have a measurement greater-than or equal to the specified, this measurement is find
+    //
     bool has_newer_measurement = false;
     for (auto const &pair : (*it).second->timestamps) {
+      // 如果某个特征点时间序列里有时间比指定的timestamp大，说明这个特征在timestamp之后也在被跟踪
       has_newer_measurement = (!pair.second.empty() && pair.second.at(pair.second.size() - 1) >= timestamp);
       if (has_newer_measurement) {
         break;
@@ -166,6 +177,14 @@ std::vector<std::shared_ptr<Feature>> FeatureDatabase::features_containing_older
   return feats_old;
 }
 
+/**
+ * @brief features_containing返回的是包含指定timestamp的特征点
+ *
+ * @param timestamp
+ * @param remove
+ * @param skip_deleted
+ * @return std::vector<std::shared_ptr<Feature>>
+ */
 std::vector<std::shared_ptr<Feature>> FeatureDatabase::features_containing(double timestamp, bool remove, bool skip_deleted) {
 
   // Our vector of old features

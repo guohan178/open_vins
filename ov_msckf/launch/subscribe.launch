@@ -1,13 +1,14 @@
 <launch>
 
     <!-- what config we are going to run (should match folder name) -->
+    <!--name参数的名称, default参数的默认值，value使用参数的值   -->
     <arg name="verbosity"   default="INFO" /> <!-- ALL, DEBUG, INFO, WARNING, ERROR, SILENT -->
     <arg name="config"      default="euroc_mav" /> <!-- euroc_mav, tum_vi, rpng_aruco -->
     <arg name="config_path" default="$(find ov_msckf)/../config/$(arg config)/estimator_config.yaml" />
 
     <!-- mono or stereo and what ros bag to play -->
-    <arg name="max_cameras" default="2" />
-    <arg name="use_stereo"  default="true" />
+    <arg name="max_cameras" default="1" />
+    <arg name="use_stereo"  default="false" />
     <arg name="bag_start"   default="0" /> <!-- v1-2: 0, mh1: 40, mh2: 35, mh3: 17.5, mh4-5: 15 -->
     <arg name="bag_rate"    default="1" />
     <arg name="dataset"     default="V1_01_easy" /> <!-- V1_01_easy, V1_02_medium, V2_02_medium -->
@@ -23,14 +24,16 @@
     <arg name="path_time"   default="/tmp/traj_timing.txt" />
 
     <!-- if we should viz the groundtruth -->
-    <arg name="dolivetraj"  default="false" />
+    <arg name="dolivetraj"  default="true" />
     <arg name="path_gt"     default="$(find ov_data)/$(arg config)/$(arg dataset).txt" />
 
     <!-- MASTER NODE! -->
 <!--    <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf" output="screen" clear_params="true" required="true" launch-prefix="gdb -ex run &#45;&#45;args">-->
+    <!--name节点名称, pkg节点所在的ROS包名, type节点的可执行文件名， output输出的方式，常用值为screen（输出到屏幕）或log（输出到日志文件, clear_params用于在节点启动之前清除参数服务器上与该节点相关的所有参数, required用于指定该节点是否是必须的，如果设置为true，当该节点崩溃或退出时，将导致整个launch文件中启动的所有节点关闭   -->
     <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf" output="screen" clear_params="true" required="true">
 
         <!-- master configuration object -->
+        <!--name参数的名称，value参数的值,  type用于指定参数的类型 -->
         <param name="verbosity"              type="string" value="$(arg verbosity)" />
         <param name="config_path"            type="string" value="$(arg config_path)" />
 
@@ -45,6 +48,7 @@
     </node>
 
     <!-- play the dataset -->
+    <!--group用于将多个节点、参数等组织在一起-->
     <group if="$(arg dobag)">
         <node pkg="rosbag" type="play" name="rosbag" args="-d 1 -r $(arg bag_rate) -s $(arg bag_start) $(arg bag)" required="true"/>
     </group>

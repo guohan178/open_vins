@@ -98,6 +98,8 @@ void UpdaterHelper::get_feature_jacobian_representation(std::shared_ptr<State> s
 
   // Jacobian for our anchor pose
   Eigen::Matrix<double, 3, 6> H_anc;
+  // p_FinA - p_IinC: 相机坐标系下（anchor相机）feat到imu的位置，
+  // R_ItoC.transpose() * (p_FinA -p_IinC)：imu坐标系下（anchor相机）feat到imu的位置
   H_anc.block(0, 0, 3, 3).noalias() = -R_GtoI.transpose() * skew_x(R_ItoC.transpose() * (p_FinA - p_IinC));
   H_anc.block(0, 3, 3, 3).setIdentity();
 
@@ -189,32 +191,35 @@ void UpdaterHelper::get_feature_jacobian_representation(std::shared_ptr<State> s
   assert(false);
 }
 
+// https://docs.openvins.com/update-feat.html#model
 void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, UpdaterHelperFeature &feature, Eigen::MatrixXd &H_f,
                                               Eigen::MatrixXd &H_x, Eigen::VectorXd &res, std::vector<std::shared_ptr<Type>> &x_order) {
 
   // Total number of measurements for this feature
+  // 一个特征点对应的所有量测数量（即对应多少个相机的多少pose，单目时就是一个相机的多个pose）
   int total_meas = 0;
   for (auto const &pair : feature.timestamps) {
     total_meas += (int)pair.second.size();
   }
 
   // Compute the size of the states involved with this feature
+  // 此feature对应的state的数量（不包括imu的15维）
   int total_hx = 0;
   std::unordered_map<std::shared_ptr<Type>, size_t> map_hx;
   for (auto const &pair : feature.timestamps) {
 
-    // Our extrinsics and intrinsics
+    // Our extrinsics and intrinsics（内外参）
     std::shared_ptr<PoseJPL> calibration = state->_calib_IMUtoCAM.at(pair.first);
     std::shared_ptr<Vec> distortion = state->_cam_intrinsics.at(pair.first);
 
-    // If doing calibration extrinsics
+    // If doing calibration extrinsics（一组外参是6位）
     if (state->_options.do_calib_camera_pose) {
       map_hx.insert({calibration, total_hx});
       x_order.push_back(calibration);
       total_hx += calibration->size();
     }
 
-    // If doing calibration intrinsics
+    // If doing calibration intrinsics（一组内参是8位，4位fx,fy,cx,cy,4位畸变参数）
     if (state->_options.do_calib_camera_intrinsics) {
       map_hx.insert({distortion, total_hx});
       x_order.push_back(distortion);
@@ -222,8 +227,8 @@ void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, Upda
     }
 
     // Loop through all measurements for this specific camera
+    // 拿到state->_clones_IMU中此feature对应的所有pose
     for (size_t m = 0; m < feature.timestamps[pair.first].size(); m++) {
-
       // Add this clone if it is not added already
       std::shared_ptr<PoseJPL> clone_Ci = state->_clones_IMU.at(feature.timestamps[pair.first].at(m));
       if (map_hx.find(clone_Ci) == map_hx.end()) {
@@ -235,6 +240,7 @@ void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, Upda
   }
 
   // If we are using an anchored representation, make sure that the anchor is also added
+  // 如果配置文件中feat_rep是anchor，需要把anchor时间对应的pose也放入到nap_hx中
   if (LandmarkRepresentation::is_relative_representation(feature.feat_representation)) {
 
     // Assert we have a clone
@@ -266,6 +272,7 @@ void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, Upda
   // Calculate the position of this feature in the global frame
   // If anchored, then we need to calculate the position of the feature in the global
   Eigen::Vector3d p_FinG = feature.p_FinG;
+  // 若为anchor resp，则需要计算出p_FinG
   if (LandmarkRepresentation::is_relative_representation(feature.feat_representation)) {
     // Assert that we have an anchor pose for this feature
     assert(feature.anchor_cam_id != -1);
@@ -294,11 +301,13 @@ void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, Upda
   int jacobsize = (feature.feat_representation != LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) ? 3 : 1;
   res = Eigen::VectorXd::Zero(2 * total_meas);
   H_f = Eigen::MatrixXd::Zero(2 * total_meas, jacobsize);
+  // 如果是global_3d，单目相机，则total_hx包括6维外参（若估计），8维内参（若估计），若干个个pose
   H_x = Eigen::MatrixXd::Zero(2 * total_meas, total_hx);
 
   // Derivative of p_FinG in respect to feature representation.
   // This only needs to be computed once and thus we pull it out of the loop
   Eigen::MatrixXd dpfg_dlambda;
+  // 若为anchor坐标系，则此为特征在全局坐标系的位置对anchor位置及anchor外参的hx（此anchor变量为imu在世界坐标系下的位姿）
   std::vector<Eigen::MatrixXd> dpfg_dx;
   std::vector<std::shared_ptr<Type>> dpfg_dx_order;
   UpdaterHelper::get_feature_jacobian_representation(state, feature, dpfg_dlambda, dpfg_dx, dpfg_dx_order);
@@ -382,17 +391,22 @@ void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, Upda
       //=========================================================================
 
       // Precompute some matrices
+      // https://docs.openvins.com/update-feat.html#model中Jacobian Compute的dzk/dx中的第一项中的前两项
       Eigen::MatrixXd dz_dpfc = dz_dzn * dzn_dpfc;
+      // https://docs.openvins.com/update-feat.html#model中Jacobian Compute的dzk/dx中的第二项中的前三项
       Eigen::MatrixXd dz_dpfg = dz_dpfc * dpfc_dpfg;
 
       // CHAINRULE: get the total feature Jacobian
+      // https://docs.openvins.com/update-feat.html#model中Jacobian Compute的dzk/dx中的第二项
       H_f.block(2 * c, 0, 2, H_f.cols()).noalias() = dz_dpfg * dpfg_dlambda;
 
       // CHAINRULE: get state clone Jacobian
+      // https://docs.openvins.com/update-feat.html#model中Jacobian Compute的dzk/dx中的第一项
       H_x.block(2 * c, map_hx[clone_Ii], 2, clone_Ii->size()).noalias() = dz_dpfc * dpfc_dclone;
 
       // CHAINRULE: loop through all extra states and add their
       // NOTE: we add the Jacobian here as we might be in the anchoring pose for this measurement
+      // 若为anchor坐标系，则为anchor位置的hx
       for (size_t i = 0; i < dpfg_dx_order.size(); i++) {
         H_x.block(2 * c, map_hx[dpfg_dx_order.at(i)], 2, dpfg_dx_order.at(i)->size()).noalias() += dz_dpfg * dpfg_dx.at(i);
       }
@@ -423,6 +437,7 @@ void UpdaterHelper::get_feature_jacobian_full(std::shared_ptr<State> state, Upda
   }
 }
 
+// https://docs.openvins.com/update-null.html
 void UpdaterHelper::nullspace_project_inplace(Eigen::MatrixXd &H_f, Eigen::MatrixXd &H_x, Eigen::VectorXd &res) {
 
   // Apply the left nullspace of H_f to all variables
@@ -437,6 +452,7 @@ void UpdaterHelper::nullspace_project_inplace(Eigen::MatrixXd &H_f, Eigen::Matri
       // Multiply G to the corresponding lines (m-1,m) in each matrix
       // Note: we only apply G to the nonzero cols [n:Ho.cols()-n-1], while
       //       it is equivalent to applying G to the entire cols [0:Ho.cols()-1].
+      // Givens从下往上，从左往右消0
       (H_f.block(m - 1, n, 2, H_f.cols() - n)).applyOnTheLeft(0, 1, tempHo_GR.adjoint());
       (H_x.block(m - 1, 0, 2, H_x.cols())).applyOnTheLeft(0, 1, tempHo_GR.adjoint());
       (res.block(m - 1, 0, 2, 1)).applyOnTheLeft(0, 1, tempHo_GR.adjoint());
@@ -446,6 +462,7 @@ void UpdaterHelper::nullspace_project_inplace(Eigen::MatrixXd &H_f, Eigen::Matri
   // The H_f jacobian max rank is 3 if it is a 3d position, thus size of the left nullspace is Hf.rows()-3
   // NOTE: need to eigen3 eval here since this experiences aliasing!
   // H_f = H_f.block(H_f.cols(),0,H_f.rows()-H_f.cols(),H_f.cols()).eval();
+  // 从下往上取2n-3行
   H_x = H_x.block(H_f.cols(), 0, H_x.rows() - H_f.cols(), H_x.cols()).eval();
   res = res.block(H_f.cols(), 0, res.rows() - H_f.cols(), res.cols()).eval();
 

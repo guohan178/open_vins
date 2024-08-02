@@ -91,6 +91,7 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
   // Then we will try to use all features that are in the feature database!
   _db->cleanup_measurements(oldest_time);
   auto it_imu = imu_data->begin();
+  // 比oldest_time老的Imu数据都移除
   while (it_imu != imu_data->end() && it_imu->timestamp < oldest_time + params.calib_camimu_dt) {
     it_imu = imu_data->erase(it_imu);
   }
@@ -108,7 +109,9 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
     int num_features1 = 0;
     double avg_disp0, avg_disp1;
     double var_disp0, var_disp1;
+    // 计算了从滑窗开始到newest_time_allowed所有特征点的平均视距avg_disp0
     FeatureHelper::compute_disparity(_db, avg_disp0, var_disp0, num_features0, newest_time_allowed);
+    // 计算了从newest_time_allowed到newest_cam_time所有特征点的平均视距avg_disp1
     FeatureHelper::compute_disparity(_db, avg_disp1, var_disp1, num_features1, newest_cam_time, newest_time_allowed);
 
     // Return if we can't compute the disparity
@@ -120,7 +123,9 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
 
     // Check if it passed our check!
     PRINT_INFO(YELLOW "[init]: disparity is %.3f,%.3f (%.2f thresh)\n" RESET, avg_disp0, avg_disp1, params.init_max_disparity);
+    // disparity_detected_moving_1to0若为true，说明在滑窗开始到newest_time_allowed期间内，相机动了，false则没动
     disparity_detected_moving_1to0 = (avg_disp0 > params.init_max_disparity);
+    // disparity_detected_moving_2to1若为true，说明在从newest_time_allowed到newest_cam_time期间内，相机动了，false则没动
     disparity_detected_moving_2to1 = (avg_disp1 > params.init_max_disparity);
   }
 

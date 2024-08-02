@@ -33,6 +33,7 @@ using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
+// https://blog.csdn.net/qq_39953906/article/details/115586436
 void StateHelper::EKFPropagation(std::shared_ptr<State> state, const std::vector<std::shared_ptr<Type>> &order_NEW,
                                  const std::vector<std::shared_ptr<Type>> &order_OLD, const Eigen::MatrixXd &Phi,
                                  const Eigen::MatrixXd &Q) {
@@ -77,6 +78,7 @@ void StateHelper::EKFPropagation(std::shared_ptr<State> state, const std::vector
 
   // Loop through all our old states and get the state transition times it
   // Cov_PhiT = [ Pxx ] [ Phi' ]'
+  // 在 Eigen C++ 库中，noalias() 是一个修饰符，用于在矩阵表达式的计算中禁用临时变量的分配和复制操作
   Eigen::MatrixXd Cov_PhiT = Eigen::MatrixXd::Zero(state->_Cov.rows(), Phi.rows());
   for (size_t i = 0; i < order_OLD.size(); i++) {
     std::shared_ptr<Type> var = order_OLD.at(i);
@@ -134,6 +136,7 @@ void StateHelper::EKFUpdate(std::shared_ptr<State> state, const std::vector<std:
   //==========================================================
   //==========================================================
   // For each active variable find its M = P*H^T
+  // H关于15维Imu的P的关系是：只有[P66*H6m,P96*H6m]，其中 P66是6位姿的协方差，P96是速度，bias与位姿的协方差，H6m是特征点与位姿的关系
   for (const auto &var : state->_variables) {
     // Sum up effect of each subjacobian = K_i= \sum_m (P_im Hm^T)
     Eigen::MatrixXd M_i = Eigen::MatrixXd::Zero(var->size(), res.rows());
@@ -316,6 +319,7 @@ void StateHelper::marginalize(std::shared_ptr<State> state, std::shared_ptr<Type
 
   // Now we keep the remaining variables and update their ordering
   // Note: DOES NOT SUPPORT MARGINALIZING SUBVARIABLES YET!!!!!!!
+  // 大于marg_id的变量id需要变化
   std::vector<std::shared_ptr<Type>> remaining_variables;
   for (size_t i = 0; i < state->_variables.size(); i++) {
     // Only keep non-marginal states
@@ -346,6 +350,7 @@ std::shared_ptr<Type> StateHelper::clone(std::shared_ptr<State> state, std::shar
   int new_loc = (int)state->_Cov.rows();
 
   // Resize both our covariance to the new size
+  // conservativeResizeLike可以调整state->_Cov大小，如果新尺寸小于原尺寸,它会保留原尺寸左上角的元素，如果新尺寸大于原尺寸,它会保留原有元素,并用另一个矩阵或数组的对应元素填充新增的部分
   state->_Cov.conservativeResizeLike(Eigen::MatrixXd::Zero(old_size + total_size, old_size + total_size));
 
   // What is the new state, and variable we inserted
@@ -368,7 +373,9 @@ std::shared_ptr<Type> StateHelper::clone(std::shared_ptr<State> state, std::shar
     int old_loc = type_check->id();
 
     // Copy the covariance elements
+    // 增广的右下角的是6*6的矩阵，J_imu*P_ii*J_imu.transpose，但是只是位置被增广，实际增广的P是clone的imu的P
     state->_Cov.block(new_loc, new_loc, total_size, total_size) = state->_Cov.block(old_loc, old_loc, total_size, total_size);
+    // 增广的是6n*6，即JP
     state->_Cov.block(0, new_loc, old_size, total_size) = state->_Cov.block(0, old_loc, old_size, total_size);
     state->_Cov.block(new_loc, 0, total_size, old_size) = state->_Cov.block(old_loc, 0, total_size, old_size);
 
@@ -386,6 +393,7 @@ std::shared_ptr<Type> StateHelper::clone(std::shared_ptr<State> state, std::shar
   }
 
   // Add to variable list and return
+  // 此new_clone此时还是是imu的poseJPL
   state->_variables.push_back(new_clone);
   return new_clone;
 }
@@ -442,12 +450,14 @@ bool StateHelper::initialize(std::shared_ptr<State> state, std::shared_ptr<Type>
 
   // Separate into initializing and updating portions
   // 1. Invertible initializing system
+  // 分别取前三（或者一行）行作为init的H_R,res和R,H_f（前三行或者一行是没进行过Givens旋转的）
   Eigen::MatrixXd Hxinit = H_R.block(0, 0, new_var_size, H_R.cols());
   Eigen::MatrixXd H_finit = H_L.block(0, 0, new_var_size, new_var_size);
   Eigen::VectorXd resinit = res.block(0, 0, new_var_size, 1);
   Eigen::MatrixXd Rinit = R.block(0, 0, new_var_size, new_var_size);
 
   // 2. Nullspace projected updating system
+  // 零空间映射后取后H_R.rows() - new_var_size行作为H_R,res和R(up)
   Eigen::MatrixXd Hup = H_R.block(new_var_size, 0, H_R.rows() - new_var_size, H_R.cols());
   Eigen::VectorXd resup = res.block(new_var_size, 0, res.rows() - new_var_size, 1);
   Eigen::MatrixXd Rup = R.block(new_var_size, new_var_size, R.rows() - new_var_size, R.rows() - new_var_size);
@@ -472,15 +482,18 @@ bool StateHelper::initialize(std::shared_ptr<State> state, std::shared_ptr<Type>
   //==========================================================
   //==========================================================
   // Finally, initialize it in our state
+  // 先用前三维初始化新增的特征点（包括特征点的3状态变量值+状态变量的增广）
   StateHelper::initialize_invertible(state, new_variable, H_order, Hxinit, H_finit, Rinit, resinit);
 
   // Update with updating portion
+  // 用剩余维数继续更新EKF
   if (Hup.rows() > 0) {
     StateHelper::EKFUpdate(state, H_order, Hup, resup, Rup);
   }
   return true;
 }
 
+// https://docs.openvins.com/update-delay.html
 void StateHelper::initialize_invertible(std::shared_ptr<State> state, std::shared_ptr<Type> new_variable,
                                         const std::vector<std::shared_ptr<Type>> &H_order, const Eigen::MatrixXd &H_R,
                                         const Eigen::MatrixXd &H_L, const Eigen::MatrixXd &R, const Eigen::VectorXd &res) {
@@ -557,6 +570,7 @@ void StateHelper::initialize_invertible(std::shared_ptr<State> state, std::share
   Eigen::MatrixXd P_LL = H_Linv * M.selfadjointView<Eigen::Upper>() * H_Linv.transpose();
 
   // Augment the covariance matrix
+  // 计算此特征点的增广P
   size_t oldSize = state->_Cov.rows();
   state->_Cov.conservativeResizeLike(Eigen::MatrixXd::Zero(oldSize + new_variable->size(), oldSize + new_variable->size()));
   state->_Cov.block(0, oldSize, oldSize, new_variable->size()).noalias() = -M_a * H_Linv.transpose();
@@ -565,6 +579,7 @@ void StateHelper::initialize_invertible(std::shared_ptr<State> state, std::share
 
   // Update the variable that will be initialized (invertible systems can only update the new variable).
   // However this update should be almost zero if we already used a conditional Gauss-Newton to solve for the initial estimate
+  // 此时假设noise和state error都是0均值，求此特征状态量（f）的均值f_mean，则f = f_estimate + f_mean,其中f_mean(f的期望)
   new_variable->update(H_Linv * res);
 
   // Now collect results, and add it to the state variables
@@ -586,6 +601,7 @@ void StateHelper::augment_clone(std::shared_ptr<State> state, Eigen::Matrix<doub
 
   // Call on our cloner and add it to our vector of types
   // NOTE: this will clone the clone pose to the END of the covariance...
+  // 只增广了cov所占的位置，没有实际算P
   std::shared_ptr<Type> posetemp = StateHelper::clone(state, state->_imu->pose());
 
   // Cast to a JPL pose type, check if valid
@@ -634,6 +650,7 @@ void StateHelper::marginalize_slam(std::shared_ptr<State> state) {
   int ct_marginalized = 0;
   auto it0 = state->_features_SLAM.begin();
   while (it0 != state->_features_SLAM.end()) {
+    // 有问题？？？不应该是&&吧，否则landmark无法被删除
     if ((*it0).second->should_marg && (int)(*it0).first > 4 * state->_options.max_aruco_features) {
       StateHelper::marginalize(state, (*it0).second);
       it0 = state->_features_SLAM.erase(it0);

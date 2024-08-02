@@ -27,11 +27,13 @@
 
 using namespace ov_core;
 
+// https://docs.openvins.com/update-featinit.html#featinit-linear
 bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
                                               std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM) {
 
   // Total number of measurements
   // Also set the first measurement to be the anchor frame
+  // 确定anchor的cam id及clone_timestamp，clone_timestamp为anchor_cam_id对应的特征点的最后一个时间
   int total_meas = 0;
   size_t anchor_most_meas = 0;
   size_t most_meas = 0;
@@ -42,6 +44,7 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
       most_meas = pair.second.size();
     }
   }
+
   feat->anchor_cam_id = anchor_most_meas;
   feat->anchor_clone_timestamp = feat->timestamps.at(feat->anchor_cam_id).back();
 
@@ -50,6 +53,7 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
   // Get the position of the anchor pose
+  // anchorclone：anchor在世界坐标系下的位姿
   ClonePose anchorclone = clonesCAM.at(feat->anchor_cam_id).at(feat->anchor_clone_timestamp);
   const Eigen::Matrix<double, 3, 3> &R_GtoA = anchorclone.Rot();
   const Eigen::Matrix<double, 3, 1> &p_AinG = anchorclone.pos();
@@ -106,7 +110,9 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   }
 
   // Store it in our feature object
+  // anchor坐标系下的feature 3d坐标
   feat->p_FinA = p_f;
+  // 全局系下feature 3d坐标
   feat->p_FinG = R_GtoA.transpose() * feat->p_FinA + p_AinG;
   return true;
 }
@@ -413,6 +419,7 @@ double FeatureInitializer::compute_error(std::unordered_map<size_t, std::unorder
       // Calculate residual
       Eigen::Matrix<float, 2, 1> z;
       z << hi1 / hi3, hi2 / hi3;
+      // ？？？z的值和去畸变的像素不相等呀？
       Eigen::Matrix<float, 2, 1> res = feat->uvs_norm.at(pair.first).at(m) - z;
       // Append to our summation variables
       err += pow(res.norm(), 2);

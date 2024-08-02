@@ -30,6 +30,7 @@ using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
+// https://blog.csdn.net/qq_42823167/article/details/135442848
 void Propagator::propagate_and_clone(std::shared_ptr<State> state, double timestamp) {
 
   // If the difference between the current update time and state is zero
@@ -127,6 +128,7 @@ void Propagator::propagate_and_clone(std::shared_ptr<State> state, double timest
       Phi_order.push_back(state->_calib_imu_ACCtoIMU);
     }
   }
+  // 更新了P（即state中的Cov）
   StateHelper::EKFPropagation(state, Phi_order, Phi_order, Phi_summed, Qd_summed);
 
   // Set timestamp data

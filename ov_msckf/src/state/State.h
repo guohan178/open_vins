@@ -58,7 +58,7 @@ public:
   ~State() {}
 
   /**
-   * @brief Will return the timestep that we will marginalize next.
+   * @brief Will return the timestep that we will marginalize next.返回的是_clones_IMU中最老的时间
    * As of right now, since we are using a sliding window, this is the oldest clone.
    * But if you wanted to do a keyframe system, you could selectively marginalize clones.
    * @return timestep of clone we will marginalize
@@ -137,7 +137,7 @@ public:
   /// Mutex for locking access to the state
   std::mutex _mutex_state;
 
-  /// Current timestamp (should be the last update time in camera clock frame!)
+  /// Current timestamp (should be the last update time in camera clock frame!) 相机时间
   double _timestamp = -1;
 
   /// Struct containing filter options
@@ -146,7 +146,9 @@ public:
   /// Pointer to the "active" IMU state (q_GtoI, p_IinG, v_IinG, bg, ba)
   std::shared_ptr<ov_type::IMU> _imu;
 
-  /// Map between imaging times and clone poses (q_GtoIi, p_IiinG)
+  /// Map between imaging times and clone poses (q_GtoIi, p_IiinG)相机时间对应的clone pose
+  //_clones_IMU中有多少就代表有多少camera pose被增广（clone pose），即滑窗内有多少相机pose，_clones_IMU存的是要被增广的相机对应的imu的pose，
+  // 后续量测更新时用imu与相机外参计算camera的pose
   std::map<double, std::shared_ptr<ov_type::PoseJPL>> _clones_IMU;
 
   /// Our current set of SLAM features (3d positions)

@@ -85,6 +85,7 @@ public:
     // NOTE:    -> 1 = num_features / (grid_x * grid_y)
     // NOTE:    -> grid_x = ratio * grid_y (keep the original grid ratio)
     // NOTE:    -> grid_y = sqrt(num_features / ratio)
+    // 如果特征点数少于网格单元数，则重新计算网格的行数和列数，以保证每个网格至少包含一个特征点
     if (num_features < grid_x * grid_y) {
       double ratio = (double)grid_x / (double)grid_y;
       grid_y = std::ceil(std::sqrt(num_features / ratio));
@@ -104,6 +105,11 @@ public:
     assert(size_y > 0);
 
     // Parallelize our 2d grid extraction!!
+    // 使用parallel_for_并行处理每个有效网格单元。
+    // 计算每个网格单元在图像中的位置，提取该区域内的FAST特征点。
+    // 对提取的特征点按响应值进行排序，并选取响应值最大的若干个特征点。
+    // 将这些特征点的坐标从局部坐标转换为全局坐标，并进行边界检查和掩码检查。
+    // collection存储的是valid_locs每个位置对应的若干个特征点
     std::vector<std::vector<cv::KeyPoint>> collection(valid_locs.size());
     parallel_for_(cv::Range(0, (int)valid_locs.size()), LambdaBody([&](const cv::Range &range) {
                     for (int r = range.start; r < range.end; r++) {
@@ -118,6 +124,7 @@ public:
                         continue;
 
                       // Calculate where we should be extracting from
+                      // 提出每个grid cell作为img_roi
                       cv::Rect img_roi = cv::Rect(x, y, size_x, size_y);
 
                       // Extract FAST features for this part of the image
@@ -125,11 +132,13 @@ public:
                       cv::FAST(img(img_roi), pts_new, threshold, nonmaxSuppression);
 
                       // Now lets get the top number from this
+                      // 根据pts_new中每个点的response(相应强度)排序，越大越可能是特征点
                       std::sort(pts_new.begin(), pts_new.end(), Grider_FAST::compare_response);
 
                       // Append the "best" ones to our vector
                       // Note that we need to "correct" the point u,v since we extracted it in a ROI
                       // So we should append the location of that ROI in the image
+                      // 选num_features_grid个最好的特征点，并将其在img中的坐标给到pt_cor，最终给到collection
                       for (size_t i = 0; i < (size_t)num_features_grid && i < pts_new.size(); i++) {
 
                         // Create keypoint
@@ -171,6 +180,7 @@ public:
     }
 
     // Finally get sub-pixel for all extracted features
+    // 对输入图像中的角点进行亚像素级别的精确化
     cv::cornerSubPix(img, pts_refined, win_size, zero_zone, term_crit);
 
     // Save the refined points!

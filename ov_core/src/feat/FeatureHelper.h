@@ -153,6 +153,7 @@ public:
         }
 
         // If we found both an old and a new time, then we are good!
+        // 如果一个feature old time和new time之间被发现，就可以计算其视距，且计算的是oldest_time后第一帧与newest_time前最后一帧的视距
         if (!found0 || !found1)
           continue;
         disparities.push_back((uv1 - uv0).norm());

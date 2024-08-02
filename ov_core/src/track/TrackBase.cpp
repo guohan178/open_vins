@@ -71,6 +71,7 @@ void TrackBase::display_active(cv::Mat &img_out, int r1, int g1, int b1, int r2,
 
   // If the image is "new" then draw the images from scratch
   // Otherwise, we grab the subset of the main image and draw on top of it
+  // 如果图像是新的我们就从头画起，否则就抓取主图的子集中，并画在上面
   bool image_new = ((int)img_last_cache.size() * max_width != img_out.cols || max_height != img_out.rows);
 
   // If new, then resize the current image

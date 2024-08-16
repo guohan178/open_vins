@@ -67,23 +67,24 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   double w_dt = mag_w * delta_t;
 
   // Threshold to determine if equations will be unstable
-  bool small_w = (mag_w < 0.008726646);
+  bool small_w = (mag_w < 0.008726646); // 0.5 deg/s
 
   // Get some of the variables used in the preintegration equations
   double dt_2 = pow(delta_t, 2);
   double cos_wt = cos(w_dt);
   double sin_wt = sin(w_dt);
 
-  Eigen::Matrix<double, 3, 3> w_x = skew_x(w_hat);
+  Eigen::Matrix<double, 3, 3> w_x = skew_x(w_hat); // 角速度叉乘
   Eigen::Matrix<double, 3, 3> a_x = skew_x(a_hat);
-  Eigen::Matrix<double, 3, 3> w_tx = skew_x(w_hatdt);
+  Eigen::Matrix<double, 3, 3> w_tx = skew_x(w_hatdt); // 角度叉乘
   Eigen::Matrix<double, 3, 3> w_x_2 = w_x * w_x;
 
   //==========================================================================
-  // MEASUREMENT MEANS
+  // MEASUREMENT MEANS(求论文（37）中的alpha_tau+1,beta_tau+1，代码中tau1就是tau+1)
   //==========================================================================
 
   // Get relative rotation
+  // 若不是小角，则遵循tr_cpi.pdf的公式（35），tau1就是tau+1的意思
   Eigen::Matrix<double, 3, 3> R_tau2tau1 = small_w ? eye3 - delta_t * w_x + (pow(delta_t, 2) / 2) * w_x_2
                                                    : eye3 - (sin_wt / mag_w) * w_x + ((1.0 - cos_wt) / (pow(mag_w, 2.0))) * w_x_2;
 
@@ -97,6 +98,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   double f_3;
   double f_4;
 
+  // 若不是小角，则遵循tr_cpi.pdf的公式（37）右侧第二部分的部分系数，即论文中的f1~f4
   if (small_w) {
     f_1 = -(pow(delta_t, 3) / 3);
     f_2 = (pow(delta_t, 4) / 8);
@@ -114,10 +116,12 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   Eigen::Matrix<double, 3, 3> Beta_arg = (delta_t * eye3 + f_3 * w_x + f_4 * w_x_2);
 
   // Matrices that will multiply the a_hat in the update expressions
+  // 公式（37）右侧部分（不包括加速度部分）
   Eigen::MatrixXd H_al = R_tau12k * alpha_arg;
   Eigen::MatrixXd H_be = R_tau12k * Beta_arg;
 
   // Update the measurement means
+  // 公式（37）左侧部分即预测值：全部求出了alpha_tau2k,beta_tau2k（此时的tau，对应求的是论文中的tau+1）
   alpha_tau += beta_tau * delta_t + H_al * a_hat;
   beta_tau += H_be * a_hat;
 
@@ -131,19 +135,23 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
               : eye3 - ((1 - cos_wt) / (pow((w_dt), 2.0))) * w_tx + ((w_dt - sin_wt) / (pow(w_dt, 3.0))) * w_tx * w_tx;
 
   // Update orientation in respect to gyro bias Jacobians
+  // 公式（80），（81）
   J_q = R_tau2tau1 * J_q + J_r_tau1 * delta_t;
 
   // Update alpha and beta in respect to accel bias Jacobians
+  // alpha对加速度bias的雅克比，beta对加速度bias的雅克比，公式（49）
   H_a -= H_al;
   H_a += delta_t * H_b;
   H_b -= H_be;
 
   // Derivatives of R_tau12k wrt bias_w entries
+  // 公式（84），是用来计算alpha与beta对角速度bias的导数的一部分的（公式（54），（59）中R对角速度bias的偏导）
   Eigen::MatrixXd d_R_bw_1 = -R_tau12k * skew_x(J_q * e_1);
   Eigen::MatrixXd d_R_bw_2 = -R_tau12k * skew_x(J_q * e_2);
   Eigen::MatrixXd d_R_bw_3 = -R_tau12k * skew_x(J_q * e_3);
 
   // Now compute the gyro bias Jacobian terms
+  // f1,f2,f3,f4对角速度bias的导数
   double df_1_dbw_1;
   double df_1_dbw_2;
   double df_1_dbw_3;
@@ -203,6 +211,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   }
 
   // Update alpha and beta gyro bias Jacobians
+  // alpha and beta对角速度bias的雅克比，公式（51，（52），（53），（59）
   J_a += J_b * delta_t;
   J_a.block(0, 0, 3, 1) +=
       (d_R_bw_1 * alpha_arg + R_tau12k * (df_1_dbw_1 * w_x - f_1 * e_1x + df_2_dbw_1 * w_x_2 - f_2 * (e_1x * w_x + w_x * e_1x))) * a_hat;
@@ -231,6 +240,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   // k1-------------------------------------------------------------------------------------------------
 
   // Build state Jacobian
+  // 公式（42），（43）状态转移矩阵F
   Eigen::Matrix<double, 15, 15> F_k1 = Eigen::Matrix<double, 15, 15>::Zero();
   F_k1.block(0, 0, 3, 3) = -w_x;
   F_k1.block(0, 3, 3, 3) = -eye3;
@@ -239,6 +249,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   F_k1.block(12, 6, 3, 3) = eye3;
 
   // Build noise Jacobian
+  // 公式（42），（43）的噪声G矩阵
   Eigen::Matrix<double, 15, 12> G_k1 = Eigen::Matrix<double, 15, 12>::Zero();
   G_k1.block(0, 0, 3, 3) = -eye3;
   G_k1.block(3, 3, 3, 3) = eye3;

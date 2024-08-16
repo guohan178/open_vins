@@ -528,6 +528,7 @@ void Propagator::predict_mean_rk4(std::shared_ptr<State> state, double dt, const
   Eigen::Matrix3d R_Gto0 = quat_2_Rot(quat_multiply(dq_0, q_0));
   Eigen::Vector3d v0_dot = R_Gto0.transpose() * a_hat - _gravity;
 
+  // k1是以y0处姿态，位置，速度的斜率乘以dt得到的三个状态的变化量
   Eigen::Vector4d k1_q = q0_dot * dt;
   Eigen::Vector3d k1_p = p0_dot * dt;
   Eigen::Vector3d k1_v = v0_dot * dt;
@@ -539,7 +540,7 @@ void Propagator::predict_mean_rk4(std::shared_ptr<State> state, double dt, const
   Eigen::Vector4d dq_1 = quatnorm(dq_0 + 0.5 * k1_q);
   // Eigen::Vector3d p_1 = p_0+0.5*k1_p;
   Eigen::Vector3d v_1 = v_0 + 0.5 * k1_v;
-
+  // 求导
   Eigen::Vector4d q1_dot = 0.5 * Omega(w_hat) * dq_1;
   Eigen::Vector3d p1_dot = v_1;
   Eigen::Matrix3d R_Gto1 = quat_2_Rot(quat_multiply(dq_1, q_0));

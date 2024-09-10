@@ -3,13 +3,13 @@
 verbosity: "INFO" # ALL, DEBUG, INFO, WARNING, ERROR, SILENT
 
 use_fej: true # if first-estimate Jacobians should be used (enable for good consistency)
-integration: "rk4" # discrete, rk4, analytical (if rk4 or analytical used then analytical covariance propagation is used)
-use_stereo: true # if we have more than 1 camera, if we should try to track stereo constraints between pairs
-max_cameras: 2 # how many cameras we have 1 = mono, 2 = stereo, >2 = binocular (all mono tracking)
+integration: "discrete" # discrete, rk4, analytical (if rk4 or analytical used then analytical covariance propagation is used)
+use_stereo: false # if we have more than 1 camera, if we should try to track stereo constraints between pairs
+max_cameras: 1 # how many cameras we have 1 = mono, 2 = stereo, >2 = binocular (all mono tracking)
 
-calib_cam_extrinsics: true # if the transform between camera and IMU should be optimized R_ItoC, p_CinI
-calib_cam_intrinsics: true # if camera intrinsics should be optimized (focal, center, distortion)
-calib_cam_timeoffset: true # if timeoffset between camera and IMU should be optimized
+calib_cam_extrinsics: false # if the transform between camera and IMU should be optimized R_ItoC, p_CinI
+calib_cam_intrinsics: false # if camera intrinsics should be optimized (focal, center, distortion)
+calib_cam_timeoffset: false # if timeoffset between camera and IMU should be optimized
 calib_imu_intrinsics: false # if imu intrinsics should be calibrated (rotation and skew-scale matrix)
 calib_imu_g_sensitivity: false # if gyroscope gravity sensitivity (Tg) should be calibrated
 
@@ -21,8 +21,8 @@ dt_slam_delay: 1 # delay before initializing (helps with stability from bad init
 
 gravity_mag: 9.81 # magnitude of gravity in this location
 
-feat_rep_msckf: "GLOBAL_3D"
-feat_rep_slam:  "ANCHORED_MSCKF_INVERSE_DEPTH"  #"ANCHORED_MSCKF_INVERSE_DEPTH"
+feat_rep_msckf: "GLOBAL_3D"   #"GLOBAL_3D"
+feat_rep_slam:  "GLOBAL_3D"  #"ANCHORED_MSCKF_INVERSE_DEPTH"
 feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
 
 # zero velocity update parameters we can use
@@ -62,8 +62,8 @@ init_dyn_bias_a: [ 0.0, 0.0, 0.0 ] # initial accelerometer bias guess
 # ==================================================================
 # ==================================================================
 
-record_timing_information: false # if we want to record timing information of the method
-record_timing_filepath: "/tmp/traj_timing.txt" # https://docs.openvins.com/eval-timing.html#eval-ov-timing-flame
+record_timing_information: true # if we want to record timing information of the method
+record_timing_filepath: "/home/ghan/catkin_ws_ov/dataset/V1_02_medium/traj_timing.txt" # https://docs.openvins.com/eval-timing.html#eval-ov-timing-flame
 
 # if we want to save the simulation state and its diagional covariance
 # use this with rosrun ov_eval error_simulation

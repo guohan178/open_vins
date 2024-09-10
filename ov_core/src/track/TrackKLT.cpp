@@ -333,6 +333,7 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
         (int)pts_left_new.at(i).pt.y > img_left.rows)
       continue;
     // See if we have the same feature in the right
+    // 此feat在右侧相机是否也有
     bool found_right = false;
     size_t index_right = 0;
     for (size_t n = 0; n < ids_right_old.size(); n++) {
@@ -344,6 +345,7 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
     }
     // If it is a good track, and also tracked from left to right
     // Else track it as a mono feature in just the left image
+    // 若此feat良好同时又能在右侧相机中双目追踪上，就把左右相机特征都记录下来，否则就只把其当做左照相机的特征点，记录在做相机的good_left和good_ids_left中
     if (mask_ll[i] && found_right && mask_rr[index_right]) {
       // Ensure we do not have any bad KLT tracks (i.e., points are negative)
       if (pts_right_new.at(index_right).pt.x < 0 || pts_right_new.at(index_right).pt.y < 0 ||
@@ -368,6 +370,7 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
         (int)pts_right_new.at(i).pt.y >= img_right.rows)
       continue;
     // See if we have the same feature in the right
+    // 查看good_ids_right中是否已经存在ids_right_old中的id点，若不存在而mask_rr结果又为1（及光流跟踪计算结果良好）
     bool added_already = (std::find(good_ids_right.begin(), good_ids_right.end(), ids_right_old.at(i)) != good_ids_right.end());
     // If it has not already been added as a good feature, add it as a mono track
     if (mask_rr[i] && !added_already) {
@@ -505,9 +508,10 @@ void TrackKLT::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, 
   }
 
   // First compute how many more features we need to extract from this image
-  // num_featsneeded为在当前图像上我们需要新提取的特征数量，如果需要新提取的特征数量太多就不提了，直接返回（初始提取除外）
+  // num_featsneeded为在当前图像上我们需要新提取的特征数量，如果需要新提取的特征数量太少就不提了，直接返回
   // If we don't need any features, just return
   double min_feat_percent = 0.50;
+  // 本次检测需要追加的特征数量,若本次检测需要追加的特征数很少（上次检测留下的特征还足够多），则本次检测就不追加feat了
   int num_featsneeded = num_features - (int)pts0.size();
   if (num_featsneeded < std::min(20, (int)(min_feat_percent * num_features)))
     return;
@@ -594,6 +598,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
   auto it1 = ids0.begin();
   while (it0 != pts0.end()) {
     // Get current left keypoint, check that it is in bounds
+    // 边缘点不要
     cv::KeyPoint kpt = *it0;
     int x = (int)kpt.pt.x;
     int y = (int)kpt.pt.y;
@@ -604,6 +609,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
       continue;
     }
     // Calculate mask coordinates for close points
+    // 超过grid的id范围的不要
     int x_close = (int)(kpt.pt.x / (float)min_px_dist);
     int y_close = (int)(kpt.pt.y / (float)min_px_dist);
     if (x_close < 0 || x_close >= size_close0.width || y_close < 0 || y_close >= size_close0.height) {
@@ -612,6 +618,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
       continue;
     }
     // Calculate what grid cell this feature is in
+    // 计算当前关键点pts在哪个子grid(cell)中，超过子grid(cell)大小不要
     int x_grid = std::floor(kpt.pt.x / size_x0);
     int y_grid = std::floor(kpt.pt.y / size_y0);
     if (x_grid < 0 || x_grid >= size_grid0.width || y_grid < 0 || y_grid >= size_grid0.height) {
@@ -620,6 +627,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
       continue;
     }
     // Check if this keypoint is near another point
+    // 若此pts所在grid的格子中已有feat,则此feat丢弃
     if (grid_2d_close0.at<uint8_t>(y_close, x_close) > 127) {
       it0 = pts0.erase(it0);
       it1 = ids0.erase(it1);
@@ -627,13 +635,16 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
     }
     // Now check if it is in a mask area or not
     // NOTE: mask has max value of 255 (white) if it should be
+    // 若在mask中，则丢弃
     if (mask0.at<uint8_t>(y, x) > 127) {
       it0 = pts0.erase(it0);
       it1 = ids0.erase(it1);
       continue;
     }
     // Else we are good, move forward to the next point
+    // 若以上都ok，保留此pts，并将grid对应id置为255（标记此id已有feat）
     grid_2d_close0.at<uint8_t>(y_close, x_close) = 255;
+    // 同时将其所在的子gird计数加1，后续使用保证每个子grid区域的feat不超过一定数量（即特征不要集中在一片区域）
     if (grid_2d_grid0.at<uint8_t>(y_grid, x_grid) < 255) {
       grid_2d_grid0.at<uint8_t>(y_grid, x_grid) += 1;
     }
@@ -649,10 +660,13 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
 
   // First compute how many more features we need to extract from this image
   double min_feat_percent = 0.50;
+  // 本次检测需要追加的特征数量
   int num_featsneeded_0 = num_features - (int)pts0.size();
 
   // LEFT: if we need features we should extract them in the current frame
+  // 对于左侧相机，若需要追加特征时，我们就从当前图像提取新特征
   // LEFT: we will also try to track them from this frame over to the right frame
+  // 我们还需要把这些左侧相机的特征在右侧相机中找到
   // LEFT: in the case that we have two features that are the same, then we should merge them
   if (num_featsneeded_0 > std::min(20, (int)(min_feat_percent * num_features))) {
 
@@ -666,11 +680,13 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
     cv::resize(mask0, mask0_grid, size_grid0, 0.0, 0.0, cv::INTER_NEAREST);
 
     // Create grids we need to extract from and then extract our features (use fast with griding)
+    // 平均每个子grid（cell）的特征数量
     int num_features_grid = (int)((double)num_features / (double)(grid_x * grid_y)) + 1;
     int num_features_grid_req = std::max(1, (int)(min_feat_percent * num_features_grid));
     std::vector<std::pair<int, int>> valid_locs;
     for (int x = 0; x < grid_2d_grid0.cols; x++) {
       for (int y = 0; y < grid_2d_grid0.rows; y++) {
+        // 若此子grid中的feats数量比num_features_grid_req少（特征点若太多过于集中的子grid不好），则此子grid是有效的
         if ((int)grid_2d_grid0.at<uint8_t>(y, x) < num_features_grid_req && (int)mask0_grid.at<uint8_t>(y, x) != 255) {
           valid_locs.emplace_back(x, y);
         }
@@ -680,6 +696,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
     Grider_GRID::perform_griding(img0pyr.at(0), mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
 
     // Now, reject features that are close a current feature
+    // 将提取到的新特征点分配到kpts0_new和pts0_new中，且分配的点需要保证grid_2d_close0网格中每个网格最多有一个点，如果grid_2d_close0已有则，则丢弃
     std::vector<cv::KeyPoint> kpts0_new;
     std::vector<cv::Point2f> pts0_new;
     for (auto &kpt : pts0_ext) {
@@ -701,6 +718,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
     // TODO: This will not work for large baseline systems.....
     // TODO: If we had some depth estimates we could do a better projection
     // TODO: Or project and search along the epipolar line??
+    // 把左侧新提取的特征点映射到右侧相机中
     std::vector<cv::KeyPoint> kpts1_new;
     std::vector<cv::Point2f> pts1_new;
     kpts1_new = kpts0_new;
@@ -716,6 +734,9 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
       // perform_matching(img0pyr, img1pyr, kpts0_new, kpts1_new, cam_id_left, cam_id_right, mask);
       std::vector<float> error;
       cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
+      // cv::calcOpticalFlowPyrLK 是 OpenCV 中实现 Lucas-Kanade 稠密光流算法的函数，用于在连续两帧图像之间追踪特定点的运动
+      //  若如果指定了 cv::OPTFLOW_USE_INITIAL_FLOW 标志，pts1_new将作为输入，提供特征点在后一帧的初始位置，新位置返回给pts1_new。
+      //  win_size表示光流窗口的大小，通常用来定义 Lucas-Kanade 算法中每个特征点的局部搜索范围。该窗口越大，搜索的范围越广，计算量也越大
       cv::calcOpticalFlowPyrLK(img0pyr, img1pyr, pts0_new, pts1_new, mask, error, win_size, pyr_levels, term_crit,
                                cv::OPTFLOW_USE_INITIAL_FLOW);
 
@@ -730,7 +751,9 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
 
         // Check to see if it there is already a feature in the right image at this location
         //  1) If this is not already in the right image, then we should treat it as a stereo
+        // 若追踪的特征点在右侧相机不存在，则认为这个特征点是双目的特征点
         //  2) Otherwise we will treat this as just a monocular track of the feature
+        ////若追踪的特征点在右侧相机已存在，则认为这个特征点是单目追踪的特征点
         // TODO: we should check to see if we can combine this new feature and the one in the right
         // TODO: seems if reject features which overlay with right features already we have very poor tracking perf
         if (!oob_left && !oob_right && mask[i] == 1) {
@@ -760,6 +783,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
   // RIGHT: Now summarise the number of tracks in the right image
   // RIGHT: We will try to extract some monocular features if we have the room
   // RIGHT: This will also remove features if there are multiple in the same location
+  // 处理右侧相机追踪到的特征点
   cv::Size size_close1((int)((float)img1pyr.at(0).cols / (float)min_px_dist), (int)((float)img1pyr.at(0).rows / (float)min_px_dist));
   cv::Mat grid_2d_close1 = cv::Mat::zeros(size_close1, CV_8UC1);
   float size_x1 = (float)img1pyr.at(0).cols / (float)grid_x;
@@ -767,6 +791,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
   cv::Size size_grid1(grid_x, grid_y); // width x height
   cv::Mat grid_2d_grid1 = cv::Mat::zeros(size_grid1, CV_8UC1);
   cv::Mat mask1_updated = mask0.clone();
+  // pts1包含1.上一次右侧相机的特征点 2.本次左侧相机新追踪到的特征点对应到右侧相机的双目特征点
   it0 = pts1.begin();
   it1 = ids1.begin();
   while (it0 != pts1.end()) {
@@ -799,7 +824,9 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
     // Check if this keypoint is near another point
     // NOTE: if it is *not* a stereo point, then we will not delete the feature
     // NOTE: this means we might have a mono and stereo feature near each other, but that is ok
+    // 若右侧相机的提取的特征点的feat id在左侧相机提取的特征点也有，说明此feat是双目跟踪特征
     bool is_stereo = (std::find(ids0.begin(), ids0.end(), *it1) != ids0.end());
+    // 若此feat在grid_2d_close1中已存在，且本次检测不是双目跟踪的特征，则弃用
     if (grid_2d_close1.at<uint8_t>(y_close, x_close) > 127 && !is_stereo) {
       it0 = pts1.erase(it0);
       it1 = ids1.erase(it1);
@@ -829,6 +856,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
 
   // RIGHT: if we need features we should extract them in the current frame
   // RIGHT: note that we don't track them to the left as we already did left->right tracking above
+  // 若右侧相机特征点不够，则需要再新追加一些特征点
   int num_featsneeded_1 = num_features - (int)pts1.size();
   if (num_featsneeded_1 > std::min(20, (int)(min_feat_percent * num_features))) {
 
@@ -852,7 +880,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
         }
       }
     }
-    std::vector<cv::KeyPoint> pts1_ext;
+    std::vector<cv::KeyPoint> pts1_ext; // 新追加的特征点
     Grider_GRID::perform_griding(img1pyr.at(0), mask1_updated, valid_locs, pts1_ext, num_features, grid_x, grid_y, threshold, true);
 
     // Now, reject features that are close a current feature

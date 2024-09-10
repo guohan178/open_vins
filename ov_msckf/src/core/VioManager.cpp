@@ -520,7 +520,8 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   }
 
   // Concatenate our MSCKF feature arrays (i.e., ones not being used for slam updates)
-  // 接下来搜集需要进行MSCKF更新的特征点，feats_lost,feats_marg,feats_maxtracks(前面已经把feats_lost中包含的feats_marg去掉了，所以不会重复，而feats_maxtracks是从feats_marg提取的)
+  // 接下来搜集需要进行MSCKF更新的特征点，feats_lost,feats_marg,feats_maxtracks(前面已经把feats_lost中包含的feats_marg去掉了，所以不会重复，
+  // 而feats_maxtracks是从feats_marg提取的，且提取feats_maxtracks时对应的feat会从feats_marg去掉，也不会重复)
   std::vector<std::shared_ptr<Feature>> featsup_MSCKF = feats_lost;
   featsup_MSCKF.insert(featsup_MSCKF.end(), feats_marg.begin(), feats_marg.end());
   featsup_MSCKF.insert(featsup_MSCKF.end(), feats_maxtracks.begin(), feats_maxtracks.end());

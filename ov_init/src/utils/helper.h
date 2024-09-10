@@ -139,12 +139,18 @@ public:
 
     // This will find an orthogonal vector to gravity which is our local z-axis
     // We need to ensure we normalize after each one such that we obtain unit vectors
+    // 计算 z 轴方向
     Eigen::Vector3d z_axis = gravity_inI / gravity_inI.norm();
     Eigen::Vector3d x_axis, y_axis;
+    // 选择初始基向量（用于正交化）
     Eigen::Vector3d e_1(1.0, 0.0, 0.0);
     Eigen::Vector3d e_2(0.0, 1.0, 0.0);
+    // 计算两个基向量与 z 轴的投影关系 e_1.dot(z_axis) = |e_1|*|z_axis|*cos_theta,这里cos_theta = inner1 和 inner2
     double inner1 = e_1.dot(z_axis) / z_axis.norm();
     double inner2 = e_2.dot(z_axis) / z_axis.norm();
+    // 计算 e_1 和 e_2 与 z_axis 的内积（即投影长度），用于确定哪个基向量更适合用于生成正交基。判断 inner1 和 inner2 的大小，选择与 z
+    // 轴投影较小的基向量进行正交化。如果 inner1 较小，说明其cos_theta较小，e1基向量与z夹角更大。使用 e_1 生成 x 轴；否则，使用 e_2 生成 x
+    // 轴。
     if (fabs(inner1) < fabs(inner2)) {
       x_axis = z_axis.cross(e_1);
       x_axis = x_axis / x_axis.norm();

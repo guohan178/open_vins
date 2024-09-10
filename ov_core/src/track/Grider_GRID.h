@@ -83,7 +83,7 @@ public:
     // NOTE: If we have more grids than number of total points, we calc the biggest grid we can do
     // NOTE: Thus if we extract 1 point per grid we have
     // NOTE:    -> 1 = num_features / (grid_x * grid_y)
-    // NOTE:    -> grid_x = ratio * grid_y (keep the original grid ratio)
+    // NOTE:    -> grid_x = ratio * grid_y (keep the original grid ratio)(保持原来的grid_x/grid_y不变)
     // NOTE:    -> grid_y = sqrt(num_features / ratio)
     // 如果特征点数少于网格单元数，则重新计算网格的行数和列数，以保证每个网格至少包含一个特征点
     if (num_features < grid_x * grid_y) {
@@ -97,6 +97,7 @@ public:
     assert(num_features_grid > 0);
 
     // Calculate the size our extraction boxes should be
+    // 重新计算每个子grid的size大小
     int size_x = img.cols / grid_x;
     int size_y = img.rows / grid_y;
 
@@ -123,8 +124,8 @@ public:
                       if (x + size_x > img.cols || y + size_y > img.rows)
                         continue;
 
-                      // Calculate where we should be extracting from
-                      // 提出每个grid cell作为img_roi
+                      // Calculate where we should be extracting from（ROI, Region of Interest）
+                      // 提出每个子grid（cell）作为img_roi
                       cv::Rect img_roi = cv::Rect(x, y, size_x, size_y);
 
                       // Extract FAST features for this part of the image
@@ -171,6 +172,7 @@ public:
     // Sub-pixel refinement parameters
     cv::Size win_size = cv::Size(5, 5);
     cv::Size zero_zone = cv::Size(-1, -1);
+    // 终止条件，用于指定迭代优化的结束标准。它是 cv::TermCriteria 类型，定义了角点精确化算法的终止条件
     cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 20, 0.001);
 
     // Get vector of points
@@ -181,6 +183,9 @@ public:
 
     // Finally get sub-pixel for all extracted features
     // 对输入图像中的角点进行亚像素级别的精确化
+    // win_size搜索窗口的大小，函数会在每个角点的附近区域内进行搜索。这是一个 cv::Size 类型，表示窗口的宽度和高度
+    // 零区大小，它指定了不参与计算的中心区域。zeroZone = cv::Size(-1, -1)
+    // 表示没有零区，整个搜索窗口都会参与计算。如果设置为正值，表示在角点附近的某个区域不被用来计算
     cv::cornerSubPix(img, pts_refined, win_size, zero_zone, term_crit);
 
     // Save the refined points!

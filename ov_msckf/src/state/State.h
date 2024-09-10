@@ -152,6 +152,7 @@ public:
   std::map<double, std::shared_ptr<ov_type::PoseJPL>> _clones_IMU;
 
   /// Our current set of SLAM features (3d positions)
+  // 若为anchor表示，则feat的3d坐标代表anchor（相机）系下的坐标
   std::unordered_map<size_t, std::shared_ptr<ov_type::Landmark>> _features_SLAM;
 
   /// Time offset base IMU to camera (t_imu = t_cam + t_off)

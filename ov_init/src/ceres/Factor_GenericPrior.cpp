@@ -61,10 +61,18 @@ Factor_GenericPrior::Factor_GenericPrior(const Eigen::MatrixXd &x_lin_, const st
   assert(prior_grad.cols() == 1);
 
   // Now lets base-compute the square-root information and constant term b
+  // 在很多优化问题中，我们需要将代价函数表示为一个二次型：cost = 1/2(x-x_lin)^T*A^T*A*(x-x_lin)+b^T(x-x_lin)+c
+  // 其中x是优化变量，x_lin 是线性化点（通常是当前的估计值），A 是信息矩阵的平方根，b 是常数项，用于调整最小化问题的目标
+  // 在这种表达式中，信息矩阵 prior_Info 通常被分解为平方根形式，即 A = L^T，其中 L 是 prior_Info 的 Cholesky 分解（或其变种）。然后，常数项
+  // b 可以通过一些线性代数操作计算得到。
   // Comes from the form: cost = A * (x - x_lin) + b
+  // 使用 Cholesky 分解将先验信息矩阵 prior_Info 分解为其平方根形式 sqrtI。prior_Info=LL^T,L是下三角矩阵
+  // 代码中的 lltOfI.matrixL().transpose() 取出了上三角矩阵 L^T
   Eigen::LLT<Eigen::MatrixXd> lltOfI(prior_Info);
+  // 取出了上三角矩阵 L^T，也就是信息矩阵的平方根 sqrtI，用于后续计算。
   sqrtI = lltOfI.matrixL().transpose();
   Eigen::MatrixXd I = Eigen::MatrixXd::Identity(prior_Info.rows(), prior_Info.rows());
+  // L^T*b=prior_grad,具体来说，这行代码计算的是 b 的值，使得代价函数符合二次型表达式
   b = sqrtI.triangularView<Eigen::Upper>().solve(I) * prior_grad;
 
   // Check that we have a valid matrix that we can get the information of

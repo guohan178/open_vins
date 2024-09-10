@@ -280,7 +280,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
     }
 
     // Perform our preintegration from I0 to Ii (used in the linear system)
-    // 执行从 I0 到 Ii 的预积分（用于线性系统）
+    // 执行从 I0(oldest_camera_time) 到 Ii(current_time) 的预积分（用于线性系统）
     double cpiI0toIi1_time0_in_imu = oldest_camera_time + params.calib_camimu_dt;
     double cpiI0toIi1_time1_in_imu = current_time + params.calib_camimu_dt;
     auto cpiI0toIi1 = std::make_shared<ov_core::CpiV1>(params.sigma_w, params.sigma_wb, params.sigma_a, params.sigma_ab, true);
@@ -307,6 +307,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
     }
 
     // Perform our preintegration from Ii to Ii1 (used in the mle optimization)
+    // 执行从Ii（last_camera_timestamp）到Ii1（current_time）的预积分（用于 mle 优化）
     double cpiIitoIi1_time0_in_imu = last_camera_timestamp + params.calib_camimu_dt;
     double cpiIitoIi1_time1_in_imu = current_time + params.calib_camimu_dt;
     auto cpiIitoIi1 = std::make_shared<ov_core::CpiV1>(params.sigma_w, params.sigma_wb, params.sigma_a, params.sigma_ab, true);
@@ -331,6 +332,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
     }
 
     // Finally push back our integrations!
+    // 保存预积分的值
     map_camera_cpi_I0toIi.insert({current_time, cpiI0toIi1});
     map_camera_cpi_IitoIi1.insert({current_time, cpiIitoIi1});
     last_camera_timestamp = current_time;
@@ -338,6 +340,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
 
   // Loop through each feature observation and append it!
   // State ordering is: [features, velocity, gravity]
+  // 遍历每个特征观测值并追加，状态顺序：[features, velocity, gravity]
   Eigen::MatrixXd A = Eigen::MatrixXd::Zero(num_measurements, system_size);
   Eigen::VectorXd b = Eigen::VectorXd::Zero(num_measurements);
   PRINT_DEBUG("[init-d]: system of %d measurement x %d states created (%d features, %s)\n", num_measurements, system_size, num_features,
@@ -377,12 +380,13 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
         Eigen::MatrixXd R_I0toIk = Eigen::MatrixXd::Identity(3, 3);
         Eigen::MatrixXd alpha_I0toIk = Eigen::MatrixXd::Zero(3, 1);
         if (map_camera_cpi_I0toIi.find(time) != map_camera_cpi_I0toIi.end() && map_camera_cpi_I0toIi.at(time) != nullptr) {
-          DT = map_camera_cpi_I0toIi.at(time)->DT;
-          R_I0toIk = map_camera_cpi_I0toIi.at(time)->R_k2tau;
-          alpha_I0toIk = map_camera_cpi_I0toIi.at(time)->alpha_tau;
+          DT = map_camera_cpi_I0toIi.at(time)->DT;                  // 从I0到Ii的预积分时间总和
+          R_I0toIk = map_camera_cpi_I0toIi.at(time)->R_k2tau;       // 从I0到Ii的角度变化
+          alpha_I0toIk = map_camera_cpi_I0toIi.at(time)->alpha_tau; // 从I0到Ii的预积分alpha_tau变化
         }
 
         // Create the linear system based on the feature reprojection
+        // 论文Estimator Initialization in Vision-aided Inertial Navigation with Unknown Camera-IMU Calibration 公式（10）
         // [ 1 0 -u ] p_FinCi = [ 0 ]
         // [ 0 1 -v ]           [ 0 ]
         // where
@@ -390,9 +394,10 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
         //         = R_C0toCi * R_ItoC * (p_FinI0 - v_I0inI0 * dt - 0.5 * grav_inI0 * dt^2 - alpha) + p_IinC
         Eigen::MatrixXd H_proj = Eigen::MatrixXd::Zero(2, 3);
         H_proj << 1, 0, -uv_norm(0), 0, 1, -uv_norm(1);
-        Eigen::MatrixXd Y = H_proj * R_ItoC * R_I0toIk;
+        Eigen::MatrixXd Y = H_proj * R_ItoC * R_I0toIk; // 论文Estimator Initialization公式（12）除去Tij的部分
+        // 每个特征不同时间对应的H_i矩阵,论文Estimator Initialization公式（12）,(14)
         Eigen::MatrixXd H_i = Eigen::MatrixXd::Zero(2, system_size);
-        Eigen::MatrixXd b_i = Y * alpha_I0toIk - H_proj * p_IinC;
+        Eigen::MatrixXd b_i = Y * alpha_I0toIk - H_proj * p_IinC; // 论文Estimator Initialization公式（13）再加上H_proj * p_IinC
         if (size_feature == 1) {
           assert(false);
           // Substitute in p_FinI0 = z*bearing_inC0_rotI0 - R_ItoC^T*p_IinC
@@ -405,6 +410,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
         H_i.block(0, size_feature * num_features + 3, 2, 3) = 0.5 * DT * DT * Y; // grav
 
         // Else lets append this to our system!
+        // 论文Estimator Initialization公式（15）
         A.block(index_meas, 0, 2, A.cols()) = H_i;
         b.block(index_meas, 0, 2, 1) = b_i;
         index_meas += 2;
@@ -419,20 +425,22 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // Solve the linear system without constraint
   // Eigen::MatrixXd AtA = A.transpose() * A;
   // Eigen::MatrixXd Atb = A.transpose() * b;
-  // Eigen::MatrixXd x_hat = AtA.colPivHouseholderQr().solve(Atb);
+  // Eigen::MatrixXd x_hat = AtA.colPivHouseholderQr().solve(Atb); //x的解[特征，vel，grav]
 
   // Constrained solving |g| = 9.81 constraint
+  // 约束求解 |g| = 9.81 约束 论文Estimator Initialization公式（38），需要解带约束的最小二乘
   Eigen::MatrixXd A1 = A.block(0, 0, A.rows(), A.cols() - 3);
   // Eigen::MatrixXd A1A1_inv = (A1.transpose() * A1).inverse();
   Eigen::MatrixXd A1A1_inv = (A1.transpose() * A1).llt().solve(Eigen::MatrixXd::Identity(A1.cols(), A1.cols()));
   Eigen::MatrixXd A2 = A.block(0, A.cols() - 3, A.rows(), 3);
   Eigen::MatrixXd Temp = A2.transpose() * (Eigen::MatrixXd::Identity(A1.rows(), A1.rows()) - A1 * A1A1_inv * A1.transpose());
-  Eigen::MatrixXd D = Temp * A2;
-  Eigen::MatrixXd d = Temp * b;
+  Eigen::MatrixXd D = Temp * A2; // 公式（40）
+  Eigen::MatrixXd d = Temp * b;  // 公式（41）
   Eigen::Matrix<double, 7, 1> coeff = InitializerHelper::compute_dongsi_coeff(D, d, params.gravity_mag);
 
-  // Create companion matrix of our polynomial
+  // Create companion matrix of our polynomial（创建多项式的伴随矩阵）
   // https://en.wikipedia.org/wiki/Companion_matrix
+  // 解公式（42）
   assert(coeff(0) == 1);
   Eigen::Matrix<double, 6, 6> companion_matrix = Eigen::Matrix<double, 6, 6>::Zero(coeff.rows() - 1, coeff.rows() - 1);
   companion_matrix.diagonal(-1).setOnes();
@@ -489,17 +497,21 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // Recover our gravity from the constraint!
   // Eigen::MatrixXd D_lambdaI_inv = (D - lambda_min * I_dd).inverse();
   Eigen::MatrixXd D_lambdaI_inv = (D - lambda_min * I_dd).llt().solve(I_dd);
+  // 公式（39），解出了grav
   Eigen::VectorXd state_grav = D_lambdaI_inv * d;
 
   // Overwrite our state: [features, velocity, gravity]
+  // 公式（39），解出了feat和vel
   Eigen::VectorXd state_feat_vel = -A1A1_inv * A1.transpose() * A2 * state_grav + A1A1_inv * A1.transpose() * b;
   Eigen::MatrixXd x_hat = Eigen::MatrixXd::Zero(system_size, 1);
   x_hat.block(0, 0, size_feature * num_features + 3, 1) = state_feat_vel;
   x_hat.block(size_feature * num_features + 3, 0, 3, 1) = state_grav;
+  // I0系下的vel
   Eigen::Vector3d v_I0inI0 = x_hat.block(size_feature * num_features + 0, 0, 3, 1);
   PRINT_INFO("[init-d]: velocity in I0 was %.3f,%.3f,%.3f and |v| = %.4f\n", v_I0inI0(0), v_I0inI0(1), v_I0inI0(2), v_I0inI0.norm());
 
   // Check gravity magnitude to see if converged
+  // 检查I0系下的重力是否收敛
   Eigen::Vector3d gravity_inI0 = x_hat.block(size_feature * num_features + 3, 0, 3, 1);
   double init_max_grav_difference = 1e-3;
   if (std::abs(gravity_inI0.norm() - params.gravity_mag) > init_max_grav_difference) {
@@ -515,6 +527,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // ======================================================
 
   // Extract imu state elements
+  // 通过预积分alpha_tau,beta_tau的值得到I0系下各个camera时刻的位姿与速度
   std::map<double, Eigen::VectorXd> ori_I0toIi, pos_IiinI0, vel_IiinI0;
   for (auto const &timepair : map_camera_times) {
 
@@ -545,6 +558,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   }
 
   // Recover the features in the first IMU frame
+  // 将特征位置转到第一帧camera系下，顺便检查z值，若z小于0,则丢弃
   count_valid_features = 0;
   std::map<size_t, Eigen::Vector3d> features_inI0;
   for (auto const &feat : features) {
@@ -580,6 +594,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
 
   // Convert our states to be a gravity aligned global frame of reference
   // Here we say that the I0 frame is at 0,0,0 and shared the global origin
+  // 通过重力算出I0到全局系的姿态转换，这里全局系是指重力延全局系的z（0，0，1）方向（平时常用的全局系）
   Eigen::Matrix3d R_GtoI0;
   InitializerHelper::gram_schmidt(gravity_inI0, R_GtoI0);
   Eigen::Vector4d q_GtoI0 = rot_2_quat(R_GtoI0);
@@ -587,11 +602,13 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   gravity << 0.0, 0.0, params.gravity_mag;
   std::map<double, Eigen::VectorXd> ori_GtoIi, pos_IiinG, vel_IiinG;
   std::map<size_t, Eigen::Vector3d> features_inG;
+  // 将每个i时刻姿态，位置，速度转换到全局系下
   for (auto const &timepair : map_camera_times) {
     ori_GtoIi[timepair.first] = quat_multiply(ori_I0toIi.at(timepair.first), q_GtoI0);
     pos_IiinG[timepair.first] = R_GtoI0.transpose() * pos_IiinI0.at(timepair.first);
     vel_IiinG[timepair.first] = R_GtoI0.transpose() * vel_IiinI0.at(timepair.first);
   }
+  // 将特征转到全局系下
   for (auto const &feat : features_inI0) {
     features_inG[feat.first] = R_GtoI0.transpose() * feat.second;
   }
@@ -650,6 +667,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // NOTE: We use dense schur since after eliminating features we have a dense problem
   // NOTE: http://ceres-solver.org/solving_faqs.html#solving
   ceres::Solver::Options options;
+  // 使用稠密的 Schur 分解，适合在结构化问题中处理稀疏雅可比矩阵的块对角形式，尤其常用于计算机视觉中的结构化问题（如 SLAM 和 SfM）。
   options.linear_solver_type = ceres::DENSE_SCHUR;
   options.trust_region_strategy_type = ceres::DOGLEG;
   // options.linear_solver_type = ceres::SPARSE_SCHUR;
@@ -683,6 +701,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
     // ================================================================
 
     // Load our state variables into our allocated state pointers
+    // 将状态变量加载到分配的状态指针中
     auto *var_ori = new double[4];
     for (int j = 0; j < 4; j++) {
       var_ori[j] = state_k1(0 + j, 0);
@@ -741,7 +760,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
       x_types.emplace_back("vec3");
 
       // Append it to the problem
-      auto *factor_prior = new Factor_GenericPrior(x_lin, x_types, prior_Info, prior_grad);
+      auto *factor_prior = new Factor_GenericPrior(x_lin, x_types, prior_Info, prior_grad); // 先验的cost func
       problem.AddResidualBlock(factor_prior, nullptr, factor_params);
     }
 
@@ -1008,7 +1027,9 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // Recover the covariance here of the optimized states
   // NOTE: for now just the IMU state is recovered, but we should be able to do everything
   // NOTE: maybe having features / clones will make it more stable?
-  std::vector<std::pair<const double *, const double *>> covariance_blocks;
+  // 每个元素是一个参数块对（pair），表示需要计算协方差的两个参数块。这些参数块是通过指针指向的，并且通常是 double* 类型，指向在 Ceres
+  // 中定义的变量。
+  std::vector<std::pair<const double *, const double *>> covariance_blocks; // 需要计算的各个参数的地址对
   int state_index = map_states[newest_cam_time];
   // diagonals
   covariance_blocks.push_back(std::make_pair(ceres_vars_ori[state_index], ceres_vars_ori[state_index]));
@@ -1033,7 +1054,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
 
   // Finally, compute the covariance
   ceres::Covariance::Options options_cov;
-  options_cov.null_space_rank = (!params.init_dyn_mle_opt_calib) * ((int)map_calib_cam2imu.size() * (6 + 8));
+  options_cov.null_space_rank = (!params.init_dyn_mle_opt_calib) * ((int)map_calib_cam2imu.size() * (6 + 8)); // 若为单目，就是（6+8）
   options_cov.min_reciprocal_condition_number = params.init_dyn_min_rec_cond;
   // options_cov.algorithm_type = ceres::CovarianceAlgorithmType::DENSE_SVD;
   options_cov.apply_loss_function = true; // Better consistency if we use this

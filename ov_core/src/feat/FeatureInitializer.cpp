@@ -53,7 +53,7 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
   // Get the position of the anchor pose
-  // anchorclone：anchor在世界坐标系下的位姿
+  // anchorclone：anchor相机在世界坐标系下的位姿
   ClonePose anchorclone = clonesCAM.at(feat->anchor_cam_id).at(feat->anchor_clone_timestamp);
   const Eigen::Matrix<double, 3, 3> &R_GtoA = anchorclone.Rot();
   const Eigen::Matrix<double, 3, 1> &p_AinG = anchorclone.pos();

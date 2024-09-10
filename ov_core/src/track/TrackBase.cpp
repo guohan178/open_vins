@@ -176,8 +176,9 @@ void TrackBase::display_history(cv::Mat &img_out, int r1, int g1, int b1, int r2
         cv::Point2f pt_c = pts_last_cache[pair.first].at(i).pt;
         cv::Point2f pt_l_top = cv::Point2f(pt_c.x - ((is_small) ? 3 : 5), pt_c.y - ((is_small) ? 3 : 5));
         cv::Point2f pt_l_bot = cv::Point2f(pt_c.x + ((is_small) ? 3 : 5), pt_c.y + ((is_small) ? 3 : 5));
-        cv::rectangle(img_temp, pt_l_top, pt_l_bot, cv::Scalar(0, 255, 0), 1);
-        cv::circle(img_temp, pt_c, (is_small) ? 1 : 2, cv::Scalar(0, 255, 0), cv::FILLED);
+        // 下面两种组合在一起是图中绿色框+实心点
+        cv::rectangle(img_temp, pt_l_top, pt_l_bot, cv::Scalar(0, 255, 0), 1);             // 绿色矩形
+        cv::circle(img_temp, pt_c, (is_small) ? 1 : 2, cv::Scalar(0, 255, 0), cv::FILLED); // 绿色实芯
       }
       // Get the feature from the database
       Feature feat;

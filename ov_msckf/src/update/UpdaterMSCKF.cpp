@@ -77,7 +77,7 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   while (it0 != feature_vec.end()) {
 
     // Clean the feature
-    // 不在滑窗时间内的特征点或特征点对应的不在滑窗内的时间被删除
+    // 不在滑窗时间内的特征点或特征点对应的不在滑窗内的时间被删除（比clonetimes老的时间）
     (*it0)->clean_old_measurements(clonetimes);
 
     // Count how many measurements

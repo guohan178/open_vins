@@ -216,6 +216,7 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
   }
 
   // Check if the image disparity
+  // 用图像特征视差再检测一遍是否移动
   bool disparity_passed = false;
   if (override_with_disparity_check) {
 
@@ -238,6 +239,7 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
 
   // Check if we are currently zero velocity
   // We need to pass the chi2 and not be above our velocity threshold
+  // 结合视差检测结果，卡方检测结果和imu的速度判断是否是静止的
   if (!disparity_passed && (chi2 > _options.chi2_multipler * chi2_check || state->_imu->vel().norm() > _zupt_max_velocity)) {
     last_zupt_state_timestamp = 0.0;
     last_zupt_count = 0;
@@ -253,6 +255,8 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
   // This is because we will not clone at this timestep and instead do our zero velocity update
   // NOTE: We want to keep the tracks from the second time we have called the zv-upt since this won't have a clone
   // NOTE: All future times after the second call to this function will also *not* have a clone, so we can remove those
+  // 如果已经连续两个及以上的camera时间内被检测出来是zupt，则就把上次零速的时间对应的feature删除
+  // 因为从后面更新代码看，last_zupt_state_timestamp对应的state我们不会clone或者更新完把clone的状态又删除了，所以这些状态对应时间的feat（或者feat中这些时间点）也删除了（因为反正这些feat也没有对应的状态）
   if (last_zupt_count >= 2) {
     _db->cleanup_measurements_exact(last_zupt_state_timestamp);
   }
@@ -264,6 +268,7 @@ bool UpdaterZeroVelocity::try_update(std::shared_ptr<State> state, double timest
 
     // Next propagate the biases forward in time
     // NOTE: G*Qd*G^t = dt*Qd*dt = dt*Qc
+    // 若不强制零速修正时位姿，速度变化为0，则量测更新是根据上面角速度，加速度为0列出
     if (model_time_varying_bias) {
       Eigen::MatrixXd Phi_bias = Eigen::MatrixXd::Identity(6, 6);
       std::vector<std::shared_ptr<Type>> Phi_order;

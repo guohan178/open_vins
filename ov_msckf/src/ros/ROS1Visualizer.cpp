@@ -662,6 +662,9 @@ void ROS1Visualizer::publish_images() {
     return;
 
   // Get our image of history tracks
+  // rviz中左下角的图像，绿色框+实心点代表的是跟踪的当前帧的trackFeats中属于slam feats的特征
+  // 红色连线轨迹代表trackFeats中当前帧所提取的feats及其这个feats的历史像素，并用线把他们连起来，红色越深代表离当前时间越近
+  // 实现以上内容调用的是TrackBase::display_history函数
   cv::Mat img_history = _app->get_historical_viz_image();
   if (img_history.empty())
     return;

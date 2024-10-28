@@ -3,12 +3,12 @@
     <!-- what config we are going to run (should match folder name) -->
     <!--name参数的名称, default参数的默认值，value使用参数的值   -->
     <arg name="verbosity"   default="INFO" /> <!-- ALL, DEBUG, INFO, WARNING, ERROR, SILENT -->
-    <arg name="config"      default="euroc_mav" /> <!-- euroc_mav, tum_vi, rpng_aruco -->
+    <arg name="config"      default="mynt_eye" /> <!-- euroc_mav, tum_vi, rpng_aruco -->
     <arg name="config_path" default="$(find ov_msckf)/../config/$(arg config)/estimator_config.yaml" />
 
     <!-- mono or stereo and what ros bag to play -->
-    <arg name="max_cameras" default="1" />
-    <arg name="use_stereo"  default="false" />
+    <arg name="max_cameras" default="2" />
+    <arg name="use_stereo"  default="true" />
     <arg name="bag_start"   default="0" /> <!-- v1-2: 0, mh1: 40, mh2: 35, mh3: 17.5, mh4-5: 15 -->
     <arg name="bag_rate"    default="1" />
     <arg name="dataset"     default="MH_01_easy" /> <!-- V1_01_easy, V1_02_medium, V2_02_medium -->
@@ -20,11 +20,11 @@
     <!-- saving trajectory path and timing information -->
     <arg name="dosave"      default="true" />
     <arg name="dotime"      default="true" />
-    <arg name="path_est"    default="/home/ghan/catkin_ws_ov/dataset/MH_01_easy/traj_estimate.txt" />
-    <arg name="path_time"   default="/home/ghan/catkin_ws_ov/dataset/MH_01_easy/traj_timing.txt" />
+    <arg name="path_est"    default="/home/ghan/catkin_ws_ov/traj_estimate.txt" />
+    <arg name="path_time"   default="/home/ghan/catkin_ws_ov/traj_timing.txt" />
 
     <!-- if we should viz the groundtruth -->
-    <arg name="dolivetraj"  default="true" />
+    <arg name="dolivetraj"  default="false" />
     <arg name="path_gt"     default="$(find ov_data)/$(arg config)/$(arg dataset).txt" />
 
     <!-- MASTER NODE! -->

@@ -4,6 +4,7 @@ project(ov_core)
 # Include libraries (if we don't have opencv 4, then fallback to opencv 3)
 # The OpenCV version needs to match the one used by cv_bridge otherwise you will get a segmentation fault!
 find_package(Eigen3 REQUIRED)
+find_package(cv_bridge)
 find_package(OpenCV 3 QUIET)
 if (NOT OpenCV_FOUND)
     find_package(OpenCV 4 REQUIRED)

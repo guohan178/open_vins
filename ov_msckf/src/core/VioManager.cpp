@@ -344,6 +344,16 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   if (state->_timestamp != message.timestamp) {
     propagator->propagate_and_clone(state, message.timestamp);
   }
+  // guohan???
+  // PRINT_INFO("q_GtoI = %.3f,%.3f,%.3f,%.3f | p_IinG = %.3f,%.3f,%.3f | velocity = %.3f,%.3f,%.3f | state_timestamp = %.3f | "
+  //            "message.timestamp = %.3f \n",
+  //            state->_imu->quat()(0), state->_imu->quat()(1), state->_imu->quat()(2), state->_imu->quat()(3), state->_imu->pos()(0),
+  //            state->_imu->pos()(1), state->_imu->pos()(2), state->_imu->vel()(0), state->_imu->vel()(1), state->_imu->vel()(2),
+  //            state->_timestamp, message.timestamp);
+  // PRINT_INFO("bg = %.4f,%.4f,%.4f | ba = %.4f,%.4f,%.4f\n", state->_imu->bias_g()(0), state->_imu->bias_g()(1), state->_imu->bias_g()(2),
+  //            state->_imu->bias_a()(0), state->_imu->bias_a()(1), state->_imu->bias_a()(2));
+  // return;
+  //???guohan
   rT3 = boost::posix_time::microsec_clock::local_time();
 
   // If we have not reached max clones, we should just return...
@@ -685,9 +695,9 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   timelastupdate = message.timestamp;
 
   // Debug, print our current state
-  PRINT_INFO("q_GtoI = %.3f,%.3f,%.3f,%.3f | p_IinG = %.3f,%.3f,%.3f | dist = %.2f (meters)\n", state->_imu->quat()(0),
-             state->_imu->quat()(1), state->_imu->quat()(2), state->_imu->quat()(3), state->_imu->pos()(0), state->_imu->pos()(1),
-             state->_imu->pos()(2), distance);
+  PRINT_INFO("q_GtoI = %.3f,%.3f,%.3f,%.3f | p_IinG = %.3f,%.3f,%.3f | velocity = %.3f,%.3f,%.3f | dist = %.2f (meters)\n",
+             state->_imu->quat()(0), state->_imu->quat()(1), state->_imu->quat()(2), state->_imu->quat()(3), state->_imu->pos()(0),
+             state->_imu->pos()(1), state->_imu->pos()(2), state->_imu->vel()(0), state->_imu->vel()(1), state->_imu->vel()(2), distance);
   PRINT_INFO("bg = %.4f,%.4f,%.4f | ba = %.4f,%.4f,%.4f\n", state->_imu->bias_g()(0), state->_imu->bias_g()(1), state->_imu->bias_g()(2),
              state->_imu->bias_a()(0), state->_imu->bias_a()(1), state->_imu->bias_a()(2));
 
